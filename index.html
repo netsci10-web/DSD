@@ -1,0 +1,220 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Telescope, MapPin, Orbit, Sunset, Sunrise, Moon, Stars, Sun, Lightbulb, Eclipse, ArrowLeft, Check } from 'lucide-react';
+
+// --- 천체 계산 로직을 위해 SunCalc 라이브러리를 동적으로 로드합니다 ---
+const loadSunCalc = () => {
+  return new Promise((resolve, reject) => {
+    if (window.SunCalc) {
+      resolve(window.SunCalc);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js';
+    script.onload = () => resolve(window.SunCalc);
+    script.onerror = () => reject(new Error('SunCalc 로드 실패'));
+    document.head.appendChild(script);
+  });
+};
+
+// --- 지도 로직을 위해 Leaflet 라이브러리를 동적으로 로드합니다 ---
+const loadLeaflet = () => {
+  return new Promise((resolve, reject) => {
+    if (window.L) {
+      resolve(window.L);
+      return;
+    }
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(link);
+
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.onload = () => resolve(window.L);
+    script.onerror = () => reject(new Error('Leaflet 로드 실패'));
+    document.head.appendChild(script);
+  });
+};
+
+// --- 지도 화면 컴포넌트 ---
+const MapView = ({ currentLocation, onSelectLocation, onClose }) => {
+  const mapRef = useRef(null);
+  const [selectedPoint, setSelectedPoint] = useState(null);
+  const markerRef = useRef(null);
+
+  useEffect(() => {
+    let map;
+    loadLeaflet().then((L) => {
+      if (!mapRef.current) return;
+      map = L.map(mapRef.current).setView([currentLocation.lat, currentLocation.lng], 10);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+
+      markerRef.current = L.marker([currentLocation.lat, currentLocation.lng]).addTo(map);
+
+      map.on('click', async (e) => {
+        const { lat, lng } = e.latlng;
+        markerRef.current.setLatLng([lat, lng]);
+        let name = "선택한 위치";
+        try {
+          const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+          const data = await res.json();
+          if (data && data.address) {
+            name = data.address.city || data.address.town || data.address.county || data.address.village || name;
+          }
+        } catch (err) { console.error("지명 불러오기 실패", err); }
+        setSelectedPoint({ lat, lng, name });
+        map.flyTo([lat, lng], map.getZoom());
+      });
+    });
+    return () => { if (map) map.remove(); };
+  }, [currentLocation.lat, currentLocation.lng]);
+
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col bg-gray-900 text-white">
+      <div className="flex items-center p-4 bg-gray-800 shadow-md">
+        <button onClick={onClose} className="p-2 mr-2 rounded-full hover:bg-gray-700"><ArrowLeft size={24} /></button>
+        <h2 className="text-xl font-bold">관측 위치 선택</h2>
+      </div>
+      <div className="flex-grow relative">
+        <div ref={mapRef} className="w-full h-full z-0"></div>
+        {selectedPoint && (
+          <div className="absolute bottom-6 left-4 right-4 bg-gray-800 rounded-2xl p-5 shadow-2xl z-[1000] border border-gray-700">
+            <h3 className="text-lg font-bold mb-1">{selectedPoint.name}</h3>
+            <p className="text-sm text-gray-400 font-mono mb-4">위도: {selectedPoint.lat.toFixed(4)}, 경도: {selectedPoint.lng.toFixed(4)}</p>
+            <button onClick={() => onSelectLocation(selectedPoint)} className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors">
+              <Check size={20} /> 이 위치로 설정
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const PickerColumn = ({ items, value, onChange, width, suffix = "", align = "center" }) => {
+  const containerRef = useRef(null);
+  const ITEM_HEIGHT = 44;
+  useEffect(() => {
+    if (containerRef.current) {
+      const index = items.indexOf(value);
+      if (index !== -1) containerRef.current.scrollTo({ top: index * ITEM_HEIGHT, behavior: 'smooth' });
+    }
+  }, [value, items]);
+  return (
+    <div ref={containerRef} className={`overflow-y-scroll snap-y snap-mandatory relative ${width} [&::-webkit-scrollbar]:hidden`} style={{ height: `${5 * ITEM_HEIGHT}px` }}>
+      <div style={{ height: `${2 * ITEM_HEIGHT}px` }}></div>
+      {items.map((item, i) => (
+        <div key={i} className={`flex items-center justify-center snap-center text-xl transition-all cursor-pointer ${item === value ? 'text-white font-bold' : 'text-gray-600 opacity-50'}`} style={{ height: `${ITEM_HEIGHT}px` }} onClick={() => onChange(item)}>
+          {item}{suffix}
+        </div>
+      ))}
+      <div style={{ height: `${2 * ITEM_HEIGHT}px` }}></div>
+    </div>
+  );
+};
+
+const DatePickerWheel = ({ date, onChange }) => {
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const years = useMemo(() => Array.from({ length: 30 }, (_, i) => new Date().getFullYear() - 10 + i), []);
+  const months = useMemo(() => Array.from({ length: 12 }, (_, i) => i + 1), []);
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const days = useMemo(() => Array.from({ length: daysInMonth }, (_, i) => i + 1), [daysInMonth]);
+  return (
+    <div className="flex justify-center gap-2 items-center relative">
+      <div className="absolute top-[88px] left-0 right-0 h-[44px] bg-gray-700/40 rounded-lg pointer-events-none"></div>
+      <PickerColumn items={years} value={year} onChange={(y) => onChange(new Date(y, month - 1, day))} width="w-24" suffix="년" />
+      <PickerColumn items={months} value={month} onChange={(m) => onChange(new Date(year, m - 1, day))} width="w-20" suffix="월" />
+      <PickerColumn items={days} value={day} onChange={(d) => onChange(new Date(year, month - 1, d))} width="w-20" suffix="일" />
+    </div>
+  );
+};
+
+const SAVED_LOCATION_KEY = 'dsd_app_saved_location';
+
+const App = () => {
+  const [currentView, setCurrentView] = useState('main');
+  const [SunCalc, setSunCalc] = useState(null);
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [location, setLocation] = useState(() => {
+    const saved = localStorage.getItem(SAVED_LOCATION_KEY);
+    return saved ? JSON.parse(saved) : { lat: 35.22, lng: 128.68, name: "창원시 (기본값)" };
+  });
+  const [astroData, setAstroData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    loadSunCalc().then(setSunCalc);
+  }, []);
+
+  useEffect(() => {
+    if (!SunCalc) return;
+    const baseDate = new Date(currentDate); baseDate.setHours(12, 0, 0, 0);
+    const nextDay = new Date(baseDate); nextDay.setDate(nextDay.getDate() + 1);
+    
+    const times = SunCalc.getTimes(baseDate, location.lat, location.lng);
+    const timesNext = SunCalc.getTimes(nextDay, location.lat, location.lng);
+    const moonTimes = SunCalc.getMoonTimes(baseDate, location.lat, location.lng);
+    const moonIllumination = SunCalc.getMoonIllumination(baseDate);
+
+    setAstroData({
+      sunset: times.sunset,
+      civilDusk: times.dusk, // 시민박명 종료 추가
+      nautDusk: times.nauticalDusk,
+      astroDusk: times.night,
+      astroDawn: timesNext.nightEnd,
+      nautDawn: timesNext.nauticalDawn,
+      civilDawn: timesNext.dawn,
+      sunrise: timesNext.sunrise,
+      moonSet: moonTimes.set,
+      moonRise: moonTimes.rise,
+      illumination: (moonIllumination.fraction * 100).toFixed(1),
+      age: (moonIllumination.phase * 29.53).toFixed(1)
+    });
+    setIsLoading(false);
+  }, [currentDate, location, SunCalc]);
+
+  const formatTime = (date) => date?.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }) || "--:--";
+
+  if (currentView === 'map') return <MapView currentLocation={location} onSelectLocation={(l) => { setLocation(l); localStorage.setItem(SAVED_LOCATION_KEY, JSON.stringify(l)); setCurrentView('main'); }} onClose={() => setCurrentView('main')} />;
+
+  return (
+    <div className="min-h-screen bg-black text-gray-300 p-4 pb-24">
+      <h1 className="text-2xl font-bold mb-4">천체 관측 정보</h1>
+      <p className="mb-4 text-sm underline cursor-pointer" onClick={() => setCurrentView('map')}>{location.name}</p>
+      
+      {astroData && (
+        <div className="space-y-2">
+          <DataRow icon={Sunset} label="일몰:" value={formatTime(astroData.sunset)} />
+          <DataRow icon={Sun} label="시민박명 종료:" value={formatTime(astroData.civilDusk)} colorClass="text-yellow-500" />
+          <DataRow icon={Sun} label="항해박명 종료:" value={formatTime(astroData.nautDusk)} colorClass="text-blue-300" />
+          <DataRow icon={Stars} label="천문박명 종료:" value={formatTime(astroData.astroDusk)} colorClass="text-blue-500" />
+          <div className="border-t border-gray-800 my-4"></div>
+          <DataRow icon={Stars} label="천문박명 시작:" value={formatTime(astroData.astroDawn)} colorClass="text-blue-500" />
+          <DataRow icon={Sun} label="항해박명 시작:" value={formatTime(astroData.nautDawn)} colorClass="text-blue-300" />
+          <DataRow icon={Sun} label="시민박명 시작:" value={formatTime(astroData.civilDawn)} colorClass="text-yellow-500" />
+          <DataRow icon={Sunrise} label="일출:" value={formatTime(astroData.sunrise)} />
+        </div>
+      )}
+      
+      <div className="mt-8 bg-gray-900 p-4 rounded-xl">
+        <DatePickerWheel date={currentDate} onChange={setCurrentDate} />
+      </div>
+    </div>
+  );
+};
+
+const DataRow = ({ icon: Icon, label, value, colorClass = "text-gray-300" }) => (
+  <div className="flex justify-between items-center py-2">
+    <div className="flex items-center gap-3">
+      {Icon && <Icon size={20} className={colorClass} />}
+      <span className={colorClass}>{label}</span>
+    </div>
+    <span className="font-mono">{value}</span>
+  </div>
+);
+
+export default App;
