@@ -1,172 +1,96 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Telescope, MapPin, ArrowLeft, Search, Save, Trash2, Moon } from 'lucide-react';
-
-// --- 라이브러리 로드 ---
-const loadSunCalc = () => new Promise((resolve) => {
-  if (window.SunCalc) return resolve(window.SunCalc);
-  const script = document.createElement('script');
-  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js';
-  script.onload = () => resolve(window.SunCalc);
-  document.head.appendChild(script);
-});
-
-const loadLeaflet = () => new Promise((resolve) => {
-  if (window.L) return resolve(window.L);
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-  document.head.appendChild(link);
-  const script = document.createElement('script');
-  script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-  script.onload = () => resolve(window.L);
-  document.head.appendChild(script);
-});
-
-const getMoonIconByPhase = (phase) => {
-  if (phase < 0.03 || phase > 0.97) return "🌑";
-  if (phase < 0.22) return "🌒";
-  if (phase < 0.28) return "🌓";
-  if (phase < 0.47) return "🌔";
-  if (phase < 0.53) return "🌕";
-  if (phase < 0.72) return "🌖";
-  if (phase < 0.78) return "🌗";
-  return "🌘";
-};
-
-const MapView = ({ currentLocation, onSelectLocation, onClose }) => {
-  const mapRef = useRef(null);
-  const mapInstance = useRef(null);
-  const markerRef = useRef(null);
-  const [latInput, setLatInput] = useState(currentLocation.lat.toString());
-  const [lngInput, setLngInput] = useState(currentLocation.lng.toString());
-
-  useEffect(() => {
-    loadLeaflet().then((L) => {
-      if (mapRef.current && !mapInstance.current) {
-        mapInstance.current = L.map(mapRef.current).setView([currentLocation.lat, currentLocation.lng], 10);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapInstance.current);
-        markerRef.current = L.marker([currentLocation.lat, currentLocation.lng]).addTo(mapInstance.current);
-        mapInstance.current.on('click', (e) => {
-          markerRef.current.setLatLng(e.latlng);
-          setLatInput(e.latlng.lat.toFixed(4));
-          setLngInput(e.latlng.lng.toFixed(4));
-        });
-      }
-    });
-  }, []);
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      <div className="p-4 flex items-center bg-gray-900 border-b border-gray-800">
-        <button onClick={onClose} className="mr-4"><ArrowLeft /></button>
-        <span className="font-bold">관측지 설정</span>
-      </div>
-      <div className="p-4 grid grid-cols-2 gap-2 bg-gray-900">
-        <input type="text" value={latInput} onChange={(e) => setLatInput(e.target.value)} className="bg-gray-800 p-2 rounded text-white" />
-        <input type="text" value={lngInput} onChange={(e) => setLngInput(e.target.value)} className="bg-gray-800 p-2 rounded text-white" />
-      </div>
-      <div ref={mapRef} className="flex-grow w-full"></div>
-      <button onClick={() => onSelectLocation({ lat: parseFloat(latInput), lng: parseFloat(lngInput), name: "선택된 위치" })} className="w-full bg-blue-600 p-4 font-bold">확정</button>
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>천체 관측 대시보드</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-gray-950 text-white min-h-screen">
+    <div id="app" class="pb-32">
+        <!-- 컨텐츠가 여기에 렌더링됩니다 -->
     </div>
-  );
-};
 
-const App = () => {
-  const [view, setView] = useState('home');
-  const [date, setDate] = useState(new Date());
-  const [location, setLocation] = useState(() => JSON.parse(localStorage.getItem('dsd_loc')) || { lat: 35.22, lng: 128.68, name: "창원시" });
-  const [data, setData] = useState(null);
+    <script>
+        // 초기 데이터 및 상태 관리
+        let state = {
+            view: 'home',
+            date: new Date(),
+            location: JSON.parse(localStorage.getItem('dsd_loc')) || { lat: 35.22, lng: 128.68, name: "창원시" },
+            data: null
+        };
 
-  useEffect(() => {
-    localStorage.setItem('dsd_loc', JSON.stringify(location));
-    loadSunCalc().then(sc => {
-      const times = sc.getTimes(date, location.lat, location.lng);
-      const nextDay = new Date(date.getTime() + 86400000);
-      const timesNext = sc.getTimes(nextDay, location.lat, location.lng);
-      const dsdMs = timesNext.nightEnd.getTime() - times.night.getTime();
-      const dsdHours = Math.floor(dsdMs / (1000 * 60 * 60));
-      const dsdMins = Math.floor((dsdMs % (1000 * 60 * 60)) / (1000 * 60));
-      const moon = sc.getMoonIllumination(date);
-      setData({ 
-        sunset: times.sunset, civilDusk: times.dusk, nautDusk: times.nauticalDusk, astroDusk: times.night,
-        astroDawn: timesNext.nightEnd, nautDawn: timesNext.nauticalDawn, civilDawn: timesNext.dawn, sunrise: timesNext.sunrise,
-        dsdDuration: `${dsdHours}시간 ${dsdMins}분`, moonPhase: getMoonIconByPhase(moon.phase)
-      });
-    });
-  }, [date, location]);
+        function getMoonIconByPhase(phase) {
+            if (phase < 0.03 || phase > 0.97) return "🌑";
+            if (phase < 0.22) return "🌒";
+            if (phase < 0.28) return "🌓";
+            if (phase < 0.47) return "🌔";
+            if (phase < 0.53) return "🌕";
+            if (phase < 0.72) return "🌖";
+            if (phase < 0.78) return "🌗";
+            return "🌘";
+        }
 
-  const generateDates = () => {
-    const dates = [];
-    for (let i = -7; i <= 14; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() + i);
-      dates.push(d);
-    }
-    return dates;
-  };
+        function formatTime(t) {
+            return t ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '--:--';
+        }
 
-  const formatTime = (t) => t?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        function calculateData() {
+            const times = SunCalc.getTimes(state.date, state.location.lat, state.location.lng);
+            const nextDay = new Date(state.date.getTime() + 86400000);
+            const timesNext = SunCalc.getTimes(nextDay, state.location.lat, state.location.lng);
+            const dsdMs = timesNext.nightEnd.getTime() - times.night.getTime();
+            const moon = SunCalc.getMoonIllumination(state.date);
+            
+            state.data = {
+                sunset: times.sunset, civilDusk: times.dusk, nautDusk: times.nauticalDusk, astroDusk: times.night,
+                astroDawn: timesNext.nightEnd, nautDawn: timesNext.nauticalDawn, civilDawn: timesNext.dawn, sunrise: timesNext.sunrise,
+                dsdDuration: `${Math.floor(dsdMs / 3600000)}시간 ${Math.floor((dsdMs % 3600000) / 60000)}분`,
+                moonPhase: getMoonIconByPhase(moon.phase)
+            };
+            render();
+        }
 
-  return (
-    <div className="bg-gray-950 min-h-screen text-white pb-32">
-      {view === 'map' ? <MapView currentLocation={location} onSelectLocation={(l) => { setLocation(l); setView('home'); }} onClose={() => setView('home')} /> : (
-        <div className="p-6 space-y-6">
-          <header>
-            <h1 className="text-2xl font-bold">천체 관측 대시보드</h1>
-            {data && <div className="flex items-center gap-3 mt-2"><p className="text-xl font-bold text-green-400">DSD 관측 가능 시간: {data.dsdDuration}</p><span className="text-3xl">{data.moonPhase}</span></div>}
-            <p className="text-blue-400 text-sm mt-1 cursor-pointer" onClick={() => setView('map')}><MapPin size={14} className="inline" /> {location.name}</p>
-          </header>
+        function render() {
+            const app = document.getElementById('app');
+            if (state.view === 'home') {
+                app.innerHTML = `
+                    <div class="p-6 space-y-6">
+                        <header>
+                            <h1 class="text-2xl font-bold">천체 관측 대시보드</h1>
+                            <div class="flex items-center gap-3 mt-2">
+                                <p class="text-xl font-bold text-green-400">DSD 관측 가능 시간: ${state.data?.dsdDuration || ''}</p>
+                                <span class="text-3xl">${state.data?.moonPhase || ''}</span>
+                            </div>
+                            <p class="text-blue-400 text-sm mt-1 cursor-pointer" onclick="state.view='map'; render();">📍 ${state.location.name}</p>
+                        </header>
+                        
+                        <div class="bg-gray-900 p-6 rounded-2xl border border-gray-800">
+                            <h2 class="text-xs uppercase text-gray-500 font-bold mb-4">저녁 시간 데이터</h2>
+                            ${[{l:'일몰',t:state.data?.sunset},{l:'시민박명 끝',t:state.data?.civilDusk},{l:'항해박명 끝',t:state.data?.nautDusk},{l:'천문박명 끝',t:state.data?.astroDusk}].map(x => `<div class="flex justify-between py-2 border-b border-gray-800"><span>${x.l}</span><span class="font-mono">${formatTime(x.t)}</span></div>`).join('')}
+                        </div>
 
-          {data && (
-            <>
-              <div className="bg-gray-900 p-6 rounded-2xl border border-gray-800">
-                <h2 className="text-xs uppercase text-gray-500 font-bold mb-4">저녁 시간 데이터</h2>
-                {[ {l: '일몰', t: data.sunset}, {l: '시민박명 끝', t: data.civilDusk}, {l: '항해박명 끝', t: data.nautDusk}, {l: '천문박명 끝', t: data.astroDusk} ].map(x => (
-                  <div key={x.l} className="flex justify-between py-2 border-b border-gray-800"><span>{x.l}</span><span className="font-mono">{formatTime(x.t)}</span></div>
-                ))}
-              </div>
-
-              <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
-                <h2 className="text-xs uppercase text-gray-400 font-bold mb-4">DSD 핵심 시간</h2>
-                <div className="space-y-2">
-                    <div className="flex justify-between text-purple-400">
-                        <span className="text-sm">DSD 시작시간</span>
-                        <span className="font-mono font-bold">{formatTime(data.astroDusk)}</span>
+                        <div class="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
+                            <h2 class="text-xs uppercase text-gray-400 font-bold mb-4">DSD 핵심 시간</h2>
+                            <div class="space-y-2 text-purple-400">
+                                <div class="flex justify-between"><span class="text-sm">DSD 시작시간</span><span class="font-mono font-bold">${formatTime(state.data?.astroDusk)}</span></div>
+                                <div class="flex justify-between"><span class="text-sm">DSD 끝시간</span><span class="font-mono font-bold">${formatTime(state.data?.astroDawn)}</span></div>
+                            </div>
+                        </div>
                     </div>
-                    <div className="flex justify-between text-purple-400">
-                        <span className="text-sm">DSD 끝시간</span>
-                        <span className="font-mono font-bold">{formatTime(data.astroDawn)}</span>
-                    </div>
-                </div>
-              </div>
+                `;
+            }
+        }
 
-              <div className="bg-gray-900 p-6 rounded-2xl border border-gray-800">
-                <h2 className="text-xs uppercase text-gray-500 font-bold mb-4">새벽 시간 데이터</h2>
-                {[ {l: '천문박명 시작', t: data.astroDawn}, {l: '항해박명 시작', t: data.nautDawn}, {l: '시민박명 시작', t: data.civilDawn}, {l: '일출', t: data.sunrise} ].map(x => (
-                  <div key={x.l} className="flex justify-between py-2 border-b border-gray-800"><span>{x.l}</span><span className="font-mono">{formatTime(x.t)}</span></div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
-      
-      <div className="fixed bottom-16 w-full bg-gray-900 border-t border-gray-800 p-4">
-        <div className="flex overflow-x-auto gap-3 snap-x scrollbar-hide">
-          {generateDates().map((d, i) => (
-            <button key={i} onClick={() => setDate(d)} className={`snap-center flex-shrink-0 w-16 h-16 rounded-xl flex flex-col items-center justify-center border ${date.toDateString() === d.toDateString() ? 'bg-blue-600' : 'bg-gray-800 border-gray-700'}`}>
-              <span className="text-[10px]">{d.getMonth()+1}월</span><span className="font-bold text-lg">{d.getDate()}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <nav className="fixed bottom-0 w-full bg-gray-950 border-t border-gray-800 flex justify-around p-4">
-        <button onClick={() => setView('home')} className="flex flex-col items-center"><Telescope size={20} /></button>
-        <button onClick={() => setView('map')} className="flex flex-col items-center"><MapPin size={20} /></button>
-      </nav>
-    </div>
-  );
-};
-
-export default App;
+        // 초기 실행
+        calculateData();
+    </script>
+</body>
+</html>
