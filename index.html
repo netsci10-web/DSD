@@ -14,12 +14,18 @@
     </style>
 </head>
 <body class="bg-gray-950 text-white min-h-screen">
-    <div id="app" class="pb-32">
-        <!-- 컨텐츠가 여기에 렌더링됩니다 -->
+    <div id="app" class="pb-32"></div>
+
+    <!-- 고정 네비게이션 및 날짜 선택기 -->
+    <div id="controls" class="fixed bottom-0 w-full bg-gray-900 border-t border-gray-800 z-50">
+        <div id="date-picker" class="p-4 overflow-x-auto flex gap-3 snap-x scrollbar-hide bg-gray-900 border-b border-gray-800"></div>
+        <nav class="flex justify-around p-4 bg-gray-950">
+            <button onclick="setView('home')" class="flex flex-col items-center"><span>홈</span></button>
+            <button onclick="setView('map')" class="flex flex-col items-center"><span>위치</span></button>
+        </nav>
     </div>
 
     <script>
-        // 초기 데이터 및 상태 관리
         let state = {
             view: 'home',
             date: new Date(),
@@ -42,6 +48,8 @@
             return t ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '--:--';
         }
 
+        function setView(v) { state.view = v; render(); }
+
         function calculateData() {
             const times = SunCalc.getTimes(state.date, state.location.lat, state.location.lng);
             const nextDay = new Date(state.date.getTime() + 86400000);
@@ -58,6 +66,21 @@
             render();
         }
 
+        function renderDatePicker() {
+            const container = document.getElementById('date-picker');
+            container.innerHTML = '';
+            for (let i = -7; i <= 14; i++) {
+                const d = new Date();
+                d.setDate(d.getDate() + i);
+                const isSelected = d.toDateString() === state.date.toDateString();
+                const btn = document.createElement('button');
+                btn.className = `snap-center flex-shrink-0 w-16 h-16 rounded-xl flex flex-col items-center justify-center border ${isSelected ? 'bg-blue-600 border-blue-400' : 'bg-gray-800 border-gray-700'}`;
+                btn.innerHTML = `<span class="text-[10px]">${d.getMonth()+1}월</span><span class="font-bold text-lg">${d.getDate()}</span>`;
+                btn.onclick = () => { state.date = d; calculateData(); };
+                container.appendChild(btn);
+            }
+        }
+
         function render() {
             const app = document.getElementById('app');
             if (state.view === 'home') {
@@ -69,7 +92,7 @@
                                 <p class="text-xl font-bold text-green-400">DSD 관측 가능 시간: ${state.data?.dsdDuration || ''}</p>
                                 <span class="text-3xl">${state.data?.moonPhase || ''}</span>
                             </div>
-                            <p class="text-blue-400 text-sm mt-1 cursor-pointer" onclick="state.view='map'; render();">📍 ${state.location.name}</p>
+                            <p class="text-blue-400 text-sm mt-1 cursor-pointer" onclick="setView('map')">📍 ${state.location.name}</p>
                         </header>
                         
                         <div class="bg-gray-900 p-6 rounded-2xl border border-gray-800">
@@ -84,12 +107,17 @@
                                 <div class="flex justify-between"><span class="text-sm">DSD 끝시간</span><span class="font-mono font-bold">${formatTime(state.data?.astroDawn)}</span></div>
                             </div>
                         </div>
+
+                        <div class="bg-gray-900 p-6 rounded-2xl border border-gray-800">
+                            <h2 class="text-xs uppercase text-gray-500 font-bold mb-4">새벽 시간 데이터</h2>
+                            ${[{l:'천문박명 시작',t:state.data?.astroDawn},{l:'항해박명 시작',t:state.data?.nautDawn},{l:'시민박명 시작',t:state.data?.civilDawn},{l:'일출',t:state.data?.sunrise}].map(x => `<div class="flex justify-between py-2 border-b border-gray-800"><span>${x.l}</span><span class="font-mono">${formatTime(x.t)}</span></div>`).join('')}
+                        </div>
                     </div>
                 `;
             }
+            renderDatePicker();
         }
 
-        // 초기 실행
         calculateData();
     </script>
 </body>
