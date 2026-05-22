@@ -23,13 +23,13 @@
 </head>
 <body class="bg-gray-950 text-white min-h-screen flex flex-col">
     <!-- 메인 앱 컨텐츠 렌더링 영역 -->
-    <div id="app" class="flex-grow pb-48 relative transition-all duration-300"></div>
+    <div id="app" class="flex-grow pb-64 relative transition-all duration-300"></div>
 
     <!-- 고정 네비게이션 및 날짜 선택기 (하단) -->
     <div id="controls" class="fixed bottom-0 w-full bg-gray-900 border-t border-gray-800 z-50">
         
         <!-- 상하 스크롤 휠 피커 및 좌우 도구 -->
-        <div id="date-picker-section" class="flex justify-between items-center border-b border-gray-800 h-[120px] transition-all duration-300 px-3 sm:px-6">
+        <div id="date-picker-section" class="flex justify-between items-center border-b border-gray-800 h-[196px] transition-all duration-300 px-3 sm:px-6">
             
             <!-- 왼쪽 도구 (오늘로 가기) -->
             <div class="flex items-center justify-center shrink-0 z-10 w-14">
@@ -39,7 +39,7 @@
             </div>
             
             <!-- 가운데 3열 휠 피커 -->
-            <div id="wheel-picker-container" class="flex-grow relative overflow-hidden h-[108px] flex justify-center items-center max-w-[280px] mx-auto">
+            <div id="wheel-picker-container" class="flex-grow relative overflow-hidden h-full flex justify-center items-center max-w-[280px] mx-auto">
                 <div class="absolute top-1/2 -translate-y-1/2 w-full h-[36px] bg-blue-600/20 border-y border-blue-500/40 rounded-lg pointer-events-none"></div>
                 
                 <div class="flex w-full justify-center gap-1 sm:gap-3 h-full px-1">
@@ -247,7 +247,6 @@
             }
         }
 
-        // --- 휠 피커 로직 (딱 3줄: 셀 높이 36px, 위아래 여백 36px) ---
         function buildWheelPicker() {
             const yCol = document.getElementById('wheel-year');
             const mCol = document.getElementById('wheel-month');
@@ -257,18 +256,18 @@
             const currentMonth = state.date.getMonth();
             currentMaxDays = new Date(currentYear, currentMonth + 1, 0).getDate();
 
-            let yHtml = '<div class="h-[36px] w-full shrink-0"></div>';
+            let yHtml = '<div class="h-[80px] w-full shrink-0"></div>';
             for(let i=2000; i<=2050; i++) {
                 yHtml += `<div class="h-[36px] w-full shrink-0 snap-center flex justify-center items-center cursor-pointer transition-colors" data-val="${i}" onclick="setWheelDate('year', ${i})">${i}년</div>`;
             }
-            yHtml += '<div class="h-[36px] w-full shrink-0"></div>';
+            yHtml += '<div class="h-[80px] w-full shrink-0"></div>';
             yCol.innerHTML = yHtml;
 
-            let mHtml = '<div class="h-[36px] w-full shrink-0"></div>';
+            let mHtml = '<div class="h-[80px] w-full shrink-0"></div>';
             for(let i=1; i<=12; i++) {
                 mHtml += `<div class="h-[36px] w-full shrink-0 snap-center flex justify-center items-center cursor-pointer transition-colors" data-val="${i}" onclick="setWheelDate('month', ${i})">${i}월</div>`;
             }
-            mHtml += '<div class="h-[36px] w-full shrink-0"></div>';
+            mHtml += '<div class="h-[80px] w-full shrink-0"></div>';
             mCol.innerHTML = mHtml;
 
             buildDayColumnInner(currentMaxDays);
@@ -280,11 +279,11 @@
         function buildDayColumnInner(maxDays) {
             const dCol = document.getElementById('wheel-day');
             if(!dCol) return;
-            let dHtml = '<div class="h-[36px] w-full shrink-0"></div>';
+            let dHtml = '<div class="h-[80px] w-full shrink-0"></div>';
             for(let i=1; i<=maxDays; i++) {
                 dHtml += `<div class="h-[36px] w-full shrink-0 snap-center flex justify-center items-center cursor-pointer transition-colors" data-val="${i}" onclick="setWheelDate('day', ${i})">${i}일</div>`;
             }
-            dHtml += '<div class="h-[36px] w-full shrink-0"></div>';
+            dHtml += '<div class="h-[80px] w-full shrink-0"></div>';
             dCol.innerHTML = dHtml;
         }
 
@@ -320,7 +319,7 @@
                 const items = col.querySelectorAll('[data-val]');
                 let index = 0;
                 items.forEach((el, i) => { if (parseInt(el.dataset.val) === val) index = i; });
-                col.scrollTo({ top: index * 36, behavior: 'smooth' }); // 셀 높이 36px
+                col.scrollTo({ top: index * 36, behavior: 'smooth' });
             };
             
             sync('year', y);
@@ -426,12 +425,12 @@
                 if(datePickerSection) datePickerSection.style.display = 'flex';
                 if(appContainer) {
                     appContainer.classList.remove('pb-24');
-                    appContainer.classList.add('pb-48'); 
+                    appContainer.classList.add('pb-64'); 
                 }
             } else {
                 if(datePickerSection) datePickerSection.style.display = 'none';
                 if(appContainer) {
-                    appContainer.classList.remove('pb-48');
+                    appContainer.classList.remove('pb-64');
                     appContainer.classList.add('pb-24'); 
                 }
             }
@@ -541,6 +540,72 @@
         function renderApp() {
             const app = document.getElementById('app');
             
+            let modalHtml = '';
+            if (state.showMoonModal && state.modalDate) {
+                const dDate = new Date(state.modalDate);
+                dDate.setHours(12, 0, 0, 0);
+                const dMoon = SunCalc.getMoonIllumination(dDate);
+                const dTimes = SunCalc.getMoonTimes(dDate, state.location.lat, state.location.lng);
+                const dSunTimes = SunCalc.getTimes(dDate, state.location.lat, state.location.lng);
+                const moonZodiac = getMoonZodiac(dDate);
+                
+                const phaseInfo = getMoonPhaseInfo(dMoon.phase, 120);
+                const moonAge = (dMoon.phase * 29.53058867).toFixed(1);
+                
+                let dayLengthStr = '--시간 --분';
+                if (dSunTimes.sunrise && dSunTimes.sunset) {
+                    const dayLengthMs = dSunTimes.sunset.getTime() - dSunTimes.sunrise.getTime();
+                    const dlHours = Math.floor(dayLengthMs / 3600000);
+                    const dlMins = Math.floor((dayLengthMs % 3600000) / 60000);
+                    dayLengthStr = `${dlHours}시간 ${dlMins}분`;
+                }
+                
+                modalHtml = `
+                    <div class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm transition-opacity" onclick="closeMoonDetail()">
+                        <div class="bg-gray-900 border border-gray-700 p-6 rounded-3xl shadow-[0_0_40px_rgba(0,0,0,0.8)] w-full max-w-sm" onclick="event.stopPropagation()">
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    <h3 class="text-xl font-bold">${state.modalDate.getMonth() + 1}월 ${state.modalDate.getDate()}일 상세</h3>
+                                    <p class="text-gray-400 text-sm">${phaseInfo.name}</p>
+                                </div>
+                                <button onclick="closeMoonDetail()" class="text-gray-400 hover:text-white"><i data-lucide="x" class="w-6 h-6"></i></button>
+                            </div>
+                            
+                            <div class="flex justify-center my-6">
+                                ${phaseInfo.svg}
+                            </div>
+                            
+                            <div class="space-y-3 bg-gray-800/50 p-4 rounded-xl">
+                                <div class="flex justify-between border-b border-gray-700 pb-2">
+                                    <span class="text-gray-400 text-sm">월령</span>
+                                    <span class="font-bold">${moonAge}일</span>
+                                </div>
+                                <div class="flex justify-between border-b border-gray-700 pb-2">
+                                    <span class="text-gray-400 text-sm">조명비 (밝기)</span>
+                                    <span class="font-bold">${(dMoon.fraction * 100).toFixed(1)}%</span>
+                                </div>
+                                <div class="flex justify-between border-b border-gray-700 pb-2">
+                                    <span class="text-gray-400 text-sm">월출 / 월몰</span>
+                                    <span class="font-mono"><span class="text-blue-300">${formatTime(dTimes.rise)}</span> <span class="text-gray-600">/</span> <span class="text-orange-300">${formatTime(dTimes.set)}</span></span>
+                                </div>
+                                <div class="flex justify-between border-b border-gray-700 pb-2">
+                                    <span class="text-gray-400 text-sm">일출 / 일몰</span>
+                                    <span class="font-mono"><span class="text-orange-400">${formatTime(dSunTimes.sunrise)}</span> <span class="text-gray-600">/</span> <span class="text-red-400">${formatTime(dSunTimes.sunset)}</span></span>
+                                </div>
+                                <div class="flex justify-between border-b border-gray-700 pb-2">
+                                    <span class="text-gray-400 text-sm">낮의 길이</span>
+                                    <span class="font-bold">${dayLengthStr}</span>
+                                </div>
+                                <div class="flex justify-between items-center pt-1">
+                                    <span class="text-gray-400 text-sm flex items-center gap-1"><i data-lucide="sparkles" class="w-4 h-4"></i> 달 위치 (별자리)</span>
+                                    <span class="font-bold text-blue-300">${moonZodiac}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
             if (state.view === 'home') {
                 app.innerHTML = `
                     <div class="p-4 sm:p-6 space-y-4">
@@ -560,31 +625,29 @@
                             </div>
                         </header>
                         
-                        <!-- 통합된 DSD 관측 패널 -->
-                        <div class="bg-gradient-to-r from-gray-900 to-gray-800 p-4 sm:p-5 rounded-2xl border border-purple-900/40 shadow-lg">
+                        <div class="bg-gradient-to-r from-gray-900 to-gray-800 p-4 sm:p-5 rounded-2xl border border-purple-900/40 shadow-lg relative">
                             <div class="flex justify-between items-start mb-4">
                                 <div class="flex flex-col">
                                     <h2 class="text-sm uppercase text-purple-300 font-bold mb-1 flex items-center gap-1.5"><i data-lucide="moon" class="w-4 h-4"></i> DSD 시간 (진정한 어둠)</h2>
                                     <span class="font-bold text-2xl sm:text-3xl ${state.data?.dsdDuration.includes('불가') ? 'text-red-400' : 'text-green-400'}">${state.data?.dsdDuration || ''}</span>
                                 </div>
-                                <div class="flex-shrink-0">${state.data?.moonPhaseSvg || ''}</div>
+                                <div class="flex-shrink-0 cursor-pointer transition-transform hover:scale-105" onclick="openMoonDetail(${state.date.getFullYear()}, ${state.date.getMonth()}, ${state.date.getDate()})" title="달 상세 정보 보기">
+                                    ${state.data?.moonPhaseSvg || ''}
+                                </div>
                             </div>
                             <div class="flex justify-between items-center bg-gray-950 p-3 rounded-xl border border-gray-800 w-full overflow-x-auto scrollbar-hide gap-4">
                                 <div class="flex items-center whitespace-nowrap">
-                                    <span class="text-sm sm:text-base font-bold text-gray-400 mr-2">DSD 시작:</span>
+                                    <span class="text-sm sm:text-base font-bold text-gray-400 mr-2"><span class="hidden sm:inline">DSD </span>시작:</span>
                                     <span class="flex items-center">${formatDateBox(state.data?.dsdStart)} <span class="font-bold text-base sm:text-lg text-purple-400 ml-1">${formatTime(state.data?.dsdStart)}</span></span>
                                 </div>
                                 <div class="flex items-center whitespace-nowrap">
-                                    <span class="text-sm sm:text-base font-bold text-gray-400 mr-2">DSD 끝:</span>
+                                    <span class="text-sm sm:text-base font-bold text-gray-400 mr-2"><span class="hidden sm:inline">DSD </span>끝:</span>
                                     <span class="flex items-center">${formatDateBox(state.data?.dsdEnd)} <span class="font-bold text-base sm:text-lg text-purple-400 ml-1">${formatTime(state.data?.dsdEnd)}</span></span>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- 저녁, 새벽, 출몰 정보를 모바일 스크롤/PC 중앙 정렬 -->
                         <div class="flex justify-start md:justify-center gap-3 overflow-x-auto scrollbar-hide snap-x w-full pb-2">
-                            
-                            <!-- 저녁 시간 데이터 -->
                             <div class="bg-gray-900 p-3.5 sm:p-4 rounded-2xl border border-gray-800 shadow-lg min-w-[280px] snap-center shrink-0">
                                 <h2 class="text-[14px] sm:text-[16px] uppercase text-gray-500 font-bold mb-3 flex items-center gap-1.5"><i data-lucide="sunset" class="w-4 h-4 text-orange-400"></i> 저녁 데이터</h2>
                                 ${[
@@ -603,7 +666,6 @@
                                 `).join('')}
                             </div>
 
-                            <!-- 새벽 시간 데이터 -->
                             <div class="bg-gray-900 p-3.5 sm:p-4 rounded-2xl border border-gray-800 shadow-lg min-w-[280px] snap-center shrink-0">
                                 <h2 class="text-[14px] sm:text-[16px] uppercase text-gray-500 font-bold mb-3 flex items-center gap-1.5"><i data-lucide="sunrise" class="w-4 h-4 text-blue-300"></i> 새벽 데이터</h2>
                                 ${[
@@ -622,7 +684,6 @@
                                 `).join('')}
                             </div>
 
-                            <!-- 천체 출몰 및 월령 정보 -->
                             <div class="bg-gray-900 p-3.5 sm:p-4 rounded-2xl border border-gray-800 shadow-lg min-w-[280px] snap-center shrink-0">
                                 <h2 class="text-[14px] sm:text-[16px] uppercase text-gray-500 font-bold mb-3 flex items-center gap-1.5"><i data-lucide="info" class="w-4 h-4 text-gray-300"></i> 천체 출몰</h2>
                                 ${[
@@ -645,7 +706,7 @@
                                 </div>
                             </div>
                         </div>
-
+                        ${modalHtml}
                     </div>
                 `;
             } else if (state.view === 'moon') {
@@ -676,72 +737,6 @@
                     `;
                 }
 
-                let modalHtml = '';
-                if (state.showMoonModal && state.modalDate) {
-                    const dDate = new Date(state.modalDate);
-                    dDate.setHours(12, 0, 0, 0);
-                    const dMoon = SunCalc.getMoonIllumination(dDate);
-                    const dTimes = SunCalc.getMoonTimes(dDate, state.location.lat, state.location.lng);
-                    const dSunTimes = SunCalc.getTimes(dDate, state.location.lat, state.location.lng);
-                    const moonZodiac = getMoonZodiac(dDate);
-                    
-                    const phaseInfo = getMoonPhaseInfo(dMoon.phase, 120);
-                    const moonAge = (dMoon.phase * 29.53058867).toFixed(1);
-                    
-                    let dayLengthStr = '--시간 --분';
-                    if (dSunTimes.sunrise && dSunTimes.sunset) {
-                        const dayLengthMs = dSunTimes.sunset.getTime() - dSunTimes.sunrise.getTime();
-                        const dlHours = Math.floor(dayLengthMs / 3600000);
-                        const dlMins = Math.floor((dayLengthMs % 3600000) / 60000);
-                        dayLengthStr = `${dlHours}시간 ${dlMins}분`;
-                    }
-                    
-                    modalHtml = `
-                        <div class="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm transition-opacity" onclick="closeMoonDetail()">
-                            <div class="bg-gray-900 border border-gray-700 p-6 rounded-3xl shadow-[0_0_40px_rgba(0,0,0,0.8)] w-full max-w-sm" onclick="event.stopPropagation()">
-                                <div class="flex justify-between items-start mb-4">
-                                    <div>
-                                        <h3 class="text-xl font-bold">${state.modalDate.getMonth() + 1}월 ${state.modalDate.getDate()}일 상세</h3>
-                                        <p class="text-gray-400 text-sm">${phaseInfo.name}</p>
-                                    </div>
-                                    <button onclick="closeMoonDetail()" class="text-gray-400 hover:text-white"><i data-lucide="x" class="w-6 h-6"></i></button>
-                                </div>
-                                
-                                <div class="flex justify-center my-6">
-                                    ${phaseInfo.svg}
-                                </div>
-                                
-                                <div class="space-y-3 bg-gray-800/50 p-4 rounded-xl">
-                                    <div class="flex justify-between border-b border-gray-700 pb-2">
-                                        <span class="text-gray-400 text-sm">월령</span>
-                                        <span class="font-bold">${moonAge}일</span>
-                                    </div>
-                                    <div class="flex justify-between border-b border-gray-700 pb-2">
-                                        <span class="text-gray-400 text-sm">조명비 (밝기)</span>
-                                        <span class="font-bold">${(dMoon.fraction * 100).toFixed(1)}%</span>
-                                    </div>
-                                    <div class="flex justify-between border-b border-gray-700 pb-2">
-                                        <span class="text-gray-400 text-sm">월출 / 월몰</span>
-                                        <span class="font-mono"><span class="text-blue-300">${formatTime(dTimes.rise)}</span> <span class="text-gray-600">/</span> <span class="text-orange-300">${formatTime(dTimes.set)}</span></span>
-                                    </div>
-                                    <div class="flex justify-between border-b border-gray-700 pb-2">
-                                        <span class="text-gray-400 text-sm">일출 / 일몰</span>
-                                        <span class="font-mono"><span class="text-orange-400">${formatTime(dSunTimes.sunrise)}</span> <span class="text-gray-600">/</span> <span class="text-red-400">${formatTime(dSunTimes.sunset)}</span></span>
-                                    </div>
-                                    <div class="flex justify-between border-b border-gray-700 pb-2">
-                                        <span class="text-gray-400 text-sm">낮의 길이</span>
-                                        <span class="font-bold">${dayLengthStr}</span>
-                                    </div>
-                                    <div class="flex justify-between items-center pt-1">
-                                        <span class="text-gray-400 text-sm flex items-center gap-1"><i data-lucide="sparkles" class="w-4 h-4"></i> 달 위치 (별자리)</span>
-                                        <span class="font-bold text-blue-300">${moonZodiac}</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                }
-
                 app.innerHTML = `
                     <div class="min-h-full night-sky relative p-4 pt-10 pb-24">
                         <header class="flex justify-between items-center mb-8 px-2">
@@ -767,12 +762,13 @@
                 app.innerHTML = `
                     <div class="h-full flex flex-col pt-4 relative z-0">
                         <div class="px-4 pb-4 bg-gray-950 space-y-3 shrink-0">
-                            <div class="flex justify-between items-center">
+                            <div class="flex justify-between items-center mb-1">
                                 <h2 class="text-lg font-bold flex items-center gap-2"><i data-lucide="map" class="w-5 h-5"></i> 관측지 설정</h2>
-                                <button onclick="getCurrentLocation()" class="bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg flex items-center gap-1 text-xs text-blue-400 transition-colors"><i data-lucide="navigation" class="w-3.5 h-3.5"></i> 현위치</button>
+                                <button onclick="getCurrentLocation()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-xl flex items-center gap-1.5 text-sm font-bold transition-colors shadow-[0_0_12px_rgba(79,70,229,0.6)]">
+                                    <i data-lucide="navigation" class="w-4 h-4"></i> 현위치 가져오기
+                                </button>
                             </div>
                             
-                            <!-- 위치 설정 영역: 위도, 경도, 버튼 1줄 통합 구조 가운데 정렬 -->
                             <div class="flex justify-center items-center gap-2 overflow-x-auto whitespace-nowrap scrollbar-hide py-2 w-full">
                                 <div class="flex items-center gap-1.5 shrink-0 bg-gray-900 px-3 py-2 rounded-xl border border-gray-800">
                                     <span class="text-sm font-bold text-gray-400">위도</span>
@@ -789,7 +785,6 @@
                                 </div>
                             </div>
                             
-                            <!-- 저장된 위치 가운데 정렬 및 글자/버튼 크기 상향 -->
                             <div class="mt-4 text-center">
                                 <div class="text-sm font-bold text-gray-400 mb-3">저장된 위치 (최대 3개)</div>
                                 <div class="flex justify-center gap-3 overflow-x-auto scrollbar-hide pb-1">
