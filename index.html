@@ -22,14 +22,14 @@
     </style>
 </head>
 <body class="bg-gray-950 text-white min-h-screen flex flex-col">
-    <!-- 메인 앱 컨텐츠 렌더링 영역 (하단 휠 높이 196px + 여백 고려) -->
-    <div id="app" class="flex-grow pb-64 relative transition-all duration-300"></div>
+    <!-- 메인 앱 컨텐츠 렌더링 영역 -->
+    <div id="app" class="flex-grow pb-48 relative transition-all duration-300"></div>
 
     <!-- 고정 네비게이션 및 날짜 선택기 (하단) -->
     <div id="controls" class="fixed bottom-0 w-full bg-gray-900 border-t border-gray-800 z-50">
         
-        <!-- 상하 스크롤 휠 피커 및 좌우 도구 (가운데 정렬 및 크기 최적화) -->
-        <div id="date-picker-section" class="flex justify-between items-center border-b border-gray-800 h-[196px] transition-all duration-300 px-3 sm:px-6">
+        <!-- 상하 스크롤 휠 피커 및 좌우 도구 -->
+        <div id="date-picker-section" class="flex justify-between items-center border-b border-gray-800 h-[120px] transition-all duration-300 px-3 sm:px-6">
             
             <!-- 왼쪽 도구 (오늘로 가기) -->
             <div class="flex items-center justify-center shrink-0 z-10 w-14">
@@ -38,9 +38,8 @@
                 </button>
             </div>
             
-            <!-- 가운데 3열 휠 피커 (글자 크기 확대 및 너비 제한) -->
-            <div id="wheel-picker-container" class="flex-grow relative overflow-hidden h-full flex justify-center items-center max-w-[280px] mx-auto">
-                <!-- 선택 영역 하이라이트 (높이 36px) -->
+            <!-- 가운데 3열 휠 피커 -->
+            <div id="wheel-picker-container" class="flex-grow relative overflow-hidden h-[108px] flex justify-center items-center max-w-[280px] mx-auto">
                 <div class="absolute top-1/2 -translate-y-1/2 w-full h-[36px] bg-blue-600/20 border-y border-blue-500/40 rounded-lg pointer-events-none"></div>
                 
                 <div class="flex w-full justify-center gap-1 sm:gap-3 h-full px-1">
@@ -86,7 +85,7 @@
             data: null,
             showMoonModal: false,
             modalDate: null,
-            moonViewDate: new Date() // 달력 이동을 위한 별도 날짜 상태
+            moonViewDate: new Date()
         };
 
         let map = null;
@@ -109,36 +108,23 @@
         }
         setInterval(updateClocks, 1000);
 
-        // --- 달력 황도대(별자리) 계산 ---
         function getMoonZodiac(date) {
             const jd = (date.getTime() / 86400000) + 2440587.5;
             const d = jd - 2451545.0; 
-            
             let L = (218.316 + 13.176396 * d) % 360;
             if (L < 0) L += 360;
-            
             let M = (134.963 + 13.064993 * d) % 360;
             if (M < 0) M += 360;
-            
             let lambda = (L + 6.289 * Math.sin(M * Math.PI / 180)) % 360;
             if (lambda < 0) lambda += 360;
 
-            const zodiacs = [
-                "양자리 (Aries)", "황소자리 (Taurus)", "쌍둥이자리 (Gemini)", 
-                "게자리 (Cancer)", "사자자리 (Leo)", "처녀자리 (Virgo)", 
-                "천칭자리 (Libra)", "전갈자리 (Scorpio)", "궁수자리 (Sagittarius)", 
-                "염소자리 (Capricorn)", "물병자리 (Aquarius)", "물고기자리 (Pisces)"
-            ];
-            
-            const index = Math.floor(lambda / 30);
-            return zodiacs[index];
+            const zodiacs = ["양자리 (Aries)", "황소자리 (Taurus)", "쌍둥이자리 (Gemini)", "게자리 (Cancer)", "사자자리 (Leo)", "처녀자리 (Virgo)", "천칭자리 (Libra)", "전갈자리 (Scorpio)", "궁수자리 (Sagittarius)", "염소자리 (Capricorn)", "물병자리 (Aquarius)", "물고기자리 (Pisces)"];
+            return zodiacs[Math.floor(lambda / 30)];
         }
 
-        // --- 진짜 달 사진 렌더링 함수 ---
         function renderRealisticMoon(phase, size = 40) {
             let rx = Math.max(0.001, 0.5 * Math.abs(Math.cos(phase * 2 * Math.PI)));
             let path = "";
-            
             if (phase <= 0.5) {
                 let sweep = phase <= 0.25 ? 0 : 1;
                 path = `M 0.5,0 A 0.5,0.5 0 0,1 0.5,1 A ${rx},0.5 0 0,${sweep} 0.5,0 Z`;
@@ -154,27 +140,17 @@
             return `
                 <div style="position: relative; width: ${size}px; height: ${size}px; border-radius: 50%; background: #000; box-shadow: 0 0 8px rgba(255,255,255,0.15); display: inline-flex; overflow: hidden; flex-shrink: 0;">
                     <svg width="0" height="0" style="position: absolute; width: 0; height: 0;">
-                        <defs>
-                            <clipPath id="${clipId}" clipPathUnits="objectBoundingBox">
-                                <path d="${path}" />
-                            </clipPath>
-                        </defs>
+                        <defs><clipPath id="${clipId}" clipPathUnits="objectBoundingBox"><path d="${path}" /></clipPath></defs>
                     </svg>
-                    <!-- 어두운 부분 (지구조) -->
                     <img src="${imgUrl}" alt="moon" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.2; filter: grayscale(100%);" crossorigin="anonymous">
-                    
-                    <!-- 밝은 부분 (위상 마스킹 적용) -->
                     <div style="position: absolute; inset: 0; clip-path: url(#${clipId}); -webkit-clip-path: url(#${clipId});">
                         <img src="${imgUrl}" alt="moon" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: grayscale(100%);" crossorigin="anonymous">
                     </div>
-                    
-                    <!-- 입체감 테두리 -->
                     <div style="position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(255,255,255,0.15);"></div>
                 </div>
             `;
         }
 
-        // --- 달 위상 이름 및 정보 ---
         function getMoonPhaseInfo(phase, size = 40) {
             let name = "";
             if (phase < 0.03 || phase > 0.97) name = "신월 (삭)";
@@ -185,7 +161,6 @@
             else if (phase < 0.72) name = "하현 이전";
             else if (phase < 0.78) name = "하현달";
             else name = "그믐달";
-            
             return { svg: renderRealisticMoon(phase, size), name: name };
         }
 
@@ -197,7 +172,7 @@
         function formatDateBox(t) {
             if (!t || isNaN(t.getTime())) return '';
             const dayOfWeek = ['일', '월', '화', '수', '목', '금', '토'][t.getDay()];
-            return `<span class="bg-gray-800 border border-gray-700 text-gray-300 px-1.5 py-0.5 rounded text-[10px] sm:text-xs mr-1 flex-shrink-0 shadow-sm">${t.getMonth() + 1}/${t.getDate()}(${dayOfWeek})</span>`;
+            return `<span class="bg-gray-800 border border-gray-700 text-gray-300 px-1.5 py-0.5 rounded text-[10px] sm:text-xs mr-1.5 flex-shrink-0 shadow-sm">${t.getMonth() + 1}/${t.getDate()}(${dayOfWeek})</span>`;
         }
 
         function getValidMoonEvent(eventToday, eventNext, dusk, dawn) {
@@ -255,11 +230,13 @@
             }
             
             const phaseInfo = getMoonPhaseInfo(moon.phase, 44);
+            const moonAge = (moon.phase * 29.53058867).toFixed(1);
 
             state.data = {
                 sunset: sunTimes.sunset, civilDusk: sunTimes.dusk, nautDusk: sunTimes.nauticalDusk, astroDusk: astroDusk,
                 astroDawn: astroDawn, nautDawn: sunTimesNext.nauticalDawn, civilDawn: sunTimesNext.dawn, sunrise: sunTimesNext.sunrise,
-                dsdStart: dsdStart, dsdEnd: dsdEnd, dsdDuration: dsdDurationStr, moonPhaseSvg: phaseInfo.svg
+                dsdStart: dsdStart, dsdEnd: dsdEnd, dsdDuration: dsdDurationStr, moonPhaseSvg: phaseInfo.svg,
+                moonrise: moonTimesToday.rise, moonset: moonTimesToday.set, moonAge: moonAge
             };
             
             renderApp();
@@ -270,7 +247,7 @@
             }
         }
 
-        // --- 휠 피커 로직 (크기 확대: 높이 36px 셀 단위, 상하 여백 80px) ---
+        // --- 휠 피커 로직 (딱 3줄: 셀 높이 36px, 위아래 여백 36px) ---
         function buildWheelPicker() {
             const yCol = document.getElementById('wheel-year');
             const mCol = document.getElementById('wheel-month');
@@ -280,19 +257,18 @@
             const currentMonth = state.date.getMonth();
             currentMaxDays = new Date(currentYear, currentMonth + 1, 0).getDate();
 
-            // 196px 컨테이너 안에서 36px 높이 선택창의 상하 여백 = (196-36)/2 = 80px
-            let yHtml = '<div class="h-[80px] w-full shrink-0"></div>';
+            let yHtml = '<div class="h-[36px] w-full shrink-0"></div>';
             for(let i=2000; i<=2050; i++) {
                 yHtml += `<div class="h-[36px] w-full shrink-0 snap-center flex justify-center items-center cursor-pointer transition-colors" data-val="${i}" onclick="setWheelDate('year', ${i})">${i}년</div>`;
             }
-            yHtml += '<div class="h-[80px] w-full shrink-0"></div>';
+            yHtml += '<div class="h-[36px] w-full shrink-0"></div>';
             yCol.innerHTML = yHtml;
 
-            let mHtml = '<div class="h-[80px] w-full shrink-0"></div>';
+            let mHtml = '<div class="h-[36px] w-full shrink-0"></div>';
             for(let i=1; i<=12; i++) {
                 mHtml += `<div class="h-[36px] w-full shrink-0 snap-center flex justify-center items-center cursor-pointer transition-colors" data-val="${i}" onclick="setWheelDate('month', ${i})">${i}월</div>`;
             }
-            mHtml += '<div class="h-[80px] w-full shrink-0"></div>';
+            mHtml += '<div class="h-[36px] w-full shrink-0"></div>';
             mCol.innerHTML = mHtml;
 
             buildDayColumnInner(currentMaxDays);
@@ -304,11 +280,11 @@
         function buildDayColumnInner(maxDays) {
             const dCol = document.getElementById('wheel-day');
             if(!dCol) return;
-            let dHtml = '<div class="h-[80px] w-full shrink-0"></div>';
+            let dHtml = '<div class="h-[36px] w-full shrink-0"></div>';
             for(let i=1; i<=maxDays; i++) {
                 dHtml += `<div class="h-[36px] w-full shrink-0 snap-center flex justify-center items-center cursor-pointer transition-colors" data-val="${i}" onclick="setWheelDate('day', ${i})">${i}일</div>`;
             }
-            dHtml += '<div class="h-[80px] w-full shrink-0"></div>';
+            dHtml += '<div class="h-[36px] w-full shrink-0"></div>';
             dCol.innerHTML = dHtml;
         }
 
@@ -324,9 +300,9 @@
                 const items = col.querySelectorAll('[data-val]');
                 items.forEach(el => {
                     if (parseInt(el.dataset.val) === val) {
-                        el.className = `h-[36px] w-full shrink-0 snap-center flex justify-center items-center cursor-pointer text-white font-bold text-xl sm:text-2xl transition-colors`;
+                        el.className = `h-[36px] w-full shrink-0 snap-center flex justify-center items-center cursor-pointer text-white font-bold text-base sm:text-lg transition-colors`;
                     } else {
-                        el.className = `h-[36px] w-full shrink-0 snap-center flex justify-center items-center cursor-pointer text-gray-500 text-base sm:text-lg hover:text-gray-300 transition-colors`;
+                        el.className = `h-[36px] w-full shrink-0 snap-center flex justify-center items-center cursor-pointer text-gray-500 text-xs sm:text-sm hover:text-gray-300 transition-colors`;
                     }
                 });
             });
@@ -350,7 +326,6 @@
             sync('year', y);
             sync('month', m);
             sync('day', d);
-
             setTimeout(() => isSyncing = false, 300);
         }
 
@@ -359,12 +334,10 @@
             clearTimeout(wheelTimeout);
             wheelTimeout = setTimeout(() => {
                 if(isSyncing) return;
-
                 const yCol = document.getElementById('wheel-year');
                 const mCol = document.getElementById('wheel-month');
                 const dCol = document.getElementById('wheel-day');
 
-                // 36px 단위 계산으로 변경
                 const yIndex = Math.round(yCol.scrollTop / 36);
                 const mIndex = Math.round(mCol.scrollTop / 36);
                 const dIndex = Math.round(dCol.scrollTop / 36);
@@ -444,11 +417,7 @@
         function setView(v) { 
             state.view = v;
             state.showMoonModal = false;
-            
-            // 달 탭 진입 시 현재 홈에서 설정한 날짜의 달로 이동
-            if (v === 'moon') {
-                state.moonViewDate = new Date(state.date);
-            }
+            if (v === 'moon') state.moonViewDate = new Date(state.date);
             
             const datePickerSection = document.getElementById('date-picker-section');
             const appContainer = document.getElementById('app');
@@ -457,18 +426,17 @@
                 if(datePickerSection) datePickerSection.style.display = 'flex';
                 if(appContainer) {
                     appContainer.classList.remove('pb-24');
-                    appContainer.classList.add('pb-64'); 
+                    appContainer.classList.add('pb-48'); 
                 }
             } else {
                 if(datePickerSection) datePickerSection.style.display = 'none';
                 if(appContainer) {
-                    appContainer.classList.remove('pb-64');
+                    appContainer.classList.remove('pb-48');
                     appContainer.classList.add('pb-24'); 
                 }
             }
 
             renderApp(); 
-            
             document.getElementById('nav-home')?.classList.toggle('text-white', state.view === 'home');
             document.getElementById('nav-moon')?.classList.toggle('text-white', state.view === 'moon');
             document.getElementById('nav-map')?.classList.toggle('text-white', state.view === 'map');
@@ -504,10 +472,8 @@
             const lng = parseFloat(document.getElementById('lng-input').value);
             if (!isNaN(lat) && !isNaN(lng)) {
                 const newLoc = { lat, lng, name: `관측지 (${lat.toFixed(2)}, ${lng.toFixed(2)})` };
-                
                 state.savedLocations = [newLoc, ...state.savedLocations.filter(l => l.lat !== lat || l.lng !== lng)].slice(0, 3);
                 localStorage.setItem('saved_locs', JSON.stringify(state.savedLocations));
-                
                 alert('위치가 목록에 저장되었습니다.');
                 renderApp();
             }
@@ -518,10 +484,8 @@
             const lng = parseFloat(document.getElementById('lng-input').value);
             if (!isNaN(lat) && !isNaN(lng)) {
                 const newLoc = { lat, lng, name: `관측지 (${lat.toFixed(2)}, ${lng.toFixed(2)})` };
-                
                 state.location = newLoc;
                 localStorage.setItem('dsd_loc', JSON.stringify(state.location));
-                
                 calculateData(false);
                 setView('home');
             }
@@ -562,16 +526,10 @@
         function initMap() {
             const container = document.getElementById('map-container');
             if (!container) return;
-
-            if (map !== null) { 
-                map.remove(); 
-                map = null; 
-            }
-            
+            if (map !== null) { map.remove(); map = null; }
             map = L.map('map-container').setView([state.location.lat, state.location.lng], 10);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
             marker = L.marker([state.location.lat, state.location.lng]).addTo(map);
-            
             map.on('click', (e) => {
                 marker.setLatLng(e.latlng);
                 document.getElementById('lat-input').value = e.latlng.lat.toFixed(4);
@@ -585,86 +543,109 @@
             
             if (state.view === 'home') {
                 app.innerHTML = `
-                    <div class="p-6 space-y-4">
-                        <header class="mb-2">
-                            <div class="flex justify-between items-center mb-2">
-                                <h1 class="text-xl font-bold text-white">천체 관측 대시보드</h1>
-                                <!-- 실시간 정보 1줄 표시 -->
-                                <div id="clock-container" class="flex gap-2 text-[10px] sm:text-xs font-mono text-gray-300 bg-gray-900/50 px-2 py-1.5 rounded-lg border border-gray-800">
-                                    <span id="clock-date"></span>
-                                    <span id="clock-lst" class="text-blue-300"></span>
-                                    <span id="clock-utc" class="text-orange-300"></span>
+                    <div class="p-4 sm:p-6 space-y-4">
+                        <header class="mb-4">
+                            <div class="flex justify-between items-start mb-2">
+                                <div>
+                                    <h1 class="text-2xl font-bold text-white cursor-pointer hover:text-gray-300 transition-colors" onclick="initApp()" title="오늘로 초기화">천체 관측 대시보드</h1>
+                                    <p class="text-blue-400 text-base sm:text-lg font-bold cursor-pointer flex items-center gap-1.5 mt-2" onclick="setView('map')">
+                                        <i data-lucide="map-pin" class="w-5 h-5"></i> ${state.location.name}
+                                    </p>
+                                </div>
+                                <div id="clock-container" class="flex flex-col items-end text-sm sm:text-base font-mono text-gray-300 bg-gray-900/50 px-3 py-2 rounded-lg border border-gray-800 shrink-0">
+                                    <span id="clock-date" class="font-bold text-base sm:text-lg text-gray-100 mb-1 border-b border-gray-700/50 pb-1 w-full text-right whitespace-nowrap"></span>
+                                    <span id="clock-lst" class="text-blue-300 font-bold mb-0.5"></span>
+                                    <span id="clock-utc" class="text-orange-300 font-bold"></span>
                                 </div>
                             </div>
-                            <p class="text-blue-400 text-xs sm:text-sm cursor-pointer flex items-center gap-1" onclick="setView('map')">
-                                <i data-lucide="map-pin" class="w-3.5 h-3.5"></i> ${state.location.name}
-                            </p>
                         </header>
                         
                         <!-- 통합된 DSD 관측 패널 -->
                         <div class="bg-gradient-to-r from-gray-900 to-gray-800 p-4 sm:p-5 rounded-2xl border border-purple-900/40 shadow-lg">
                             <div class="flex justify-between items-start mb-4">
                                 <div class="flex flex-col">
-                                    <h2 class="text-[11px] sm:text-xs uppercase text-purple-300 font-bold mb-1 flex items-center gap-1"><i data-lucide="moon" class="w-4 h-4"></i> DSD 시간 (진정한 어둠)</h2>
-                                    <span class="font-bold text-xl sm:text-2xl ${state.data?.dsdDuration.includes('불가') ? 'text-red-400' : 'text-green-400'}">${state.data?.dsdDuration || ''}</span>
+                                    <h2 class="text-sm uppercase text-purple-300 font-bold mb-1 flex items-center gap-1.5"><i data-lucide="moon" class="w-4 h-4"></i> DSD 시간 (진정한 어둠)</h2>
+                                    <span class="font-bold text-2xl sm:text-3xl ${state.data?.dsdDuration.includes('불가') ? 'text-red-400' : 'text-green-400'}">${state.data?.dsdDuration || ''}</span>
                                 </div>
                                 <div class="flex-shrink-0">${state.data?.moonPhaseSvg || ''}</div>
                             </div>
-                            <!-- DSD 시작과 끝 한 줄로 표시 -->
-                            <div class="flex justify-between items-center bg-gray-950 p-2 sm:p-3 rounded-lg border border-gray-800 w-full overflow-x-auto scrollbar-hide gap-4">
+                            <div class="flex justify-between items-center bg-gray-950 p-3 rounded-xl border border-gray-800 w-full overflow-x-auto scrollbar-hide gap-4">
                                 <div class="flex items-center whitespace-nowrap">
-                                    <span class="text-[11px] sm:text-xs text-gray-400 mr-2">DSD 시작:</span>
-                                    <span class="flex items-center">${formatDateBox(state.data?.dsdStart)} <span class="font-bold text-[13px] sm:text-sm text-purple-400 ml-1">${formatTime(state.data?.dsdStart)}</span></span>
+                                    <span class="text-sm sm:text-base font-bold text-gray-400 mr-2">DSD 시작:</span>
+                                    <span class="flex items-center">${formatDateBox(state.data?.dsdStart)} <span class="font-bold text-base sm:text-lg text-purple-400 ml-1">${formatTime(state.data?.dsdStart)}</span></span>
                                 </div>
                                 <div class="flex items-center whitespace-nowrap">
-                                    <span class="text-[11px] sm:text-xs text-gray-400 mr-2">DSD 끝:</span>
-                                    <span class="flex items-center">${formatDateBox(state.data?.dsdEnd)} <span class="font-bold text-[13px] sm:text-sm text-purple-400 ml-1">${formatTime(state.data?.dsdEnd)}</span></span>
+                                    <span class="text-sm sm:text-base font-bold text-gray-400 mr-2">DSD 끝:</span>
+                                    <span class="flex items-center">${formatDateBox(state.data?.dsdEnd)} <span class="font-bold text-base sm:text-lg text-purple-400 ml-1">${formatTime(state.data?.dsdEnd)}</span></span>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- 저녁 & 새벽 시간 데이터 나란히 배치 (Grid) -->
-                        <div class="grid grid-cols-2 gap-3">
+                        <!-- 저녁, 새벽, 출몰 정보를 모바일 스크롤/PC 중앙 정렬 -->
+                        <div class="flex justify-start md:justify-center gap-3 overflow-x-auto scrollbar-hide snap-x w-full pb-2">
                             
                             <!-- 저녁 시간 데이터 -->
-                            <div class="bg-gray-900 p-3 sm:p-4 rounded-2xl border border-gray-800 shadow-lg">
-                                <h2 class="text-[11px] uppercase text-gray-500 font-bold mb-3 flex items-center gap-1"><i data-lucide="sunset" class="w-3.5 h-3.5"></i> 저녁 데이터</h2>
+                            <div class="bg-gray-900 p-3.5 sm:p-4 rounded-2xl border border-gray-800 shadow-lg min-w-[280px] snap-center shrink-0">
+                                <h2 class="text-[14px] sm:text-[16px] uppercase text-gray-500 font-bold mb-3 flex items-center gap-1.5"><i data-lucide="sunset" class="w-4 h-4 text-orange-400"></i> 저녁 데이터</h2>
                                 ${[
                                     {l:'일몰', t:state.data?.sunset, c:'text-orange-400'},
                                     {l:'시민박명 끝', t:state.data?.civilDusk, c:'text-yellow-500'},
                                     {l:'항해박명 끝', t:state.data?.nautDusk, c:'text-blue-300'},
                                     {l:'천문박명 끝', t:state.data?.astroDusk, c:'text-blue-500'}
                                 ].map(x => `
-                                    <div class="flex flex-col py-1.5 border-b border-gray-800/60 last:border-0">
-                                        <span class="text-[10px] text-gray-400 mb-1">${x.l}</span>
-                                        <div class="flex justify-between items-center">
+                                    <div class="flex justify-between items-center py-2 border-b border-gray-800/60 last:border-0">
+                                        <span class="text-[14px] sm:text-[15px] font-bold ${x.c} whitespace-nowrap mr-2">${x.l}</span>
+                                        <div class="flex items-center text-right shrink-0">
                                             ${formatDateBox(x.t)} 
-                                            <span class="font-mono text-[11px] font-bold ${x.c}">${formatTime(x.t)}</span>
+                                            <span class="font-mono text-[15px] sm:text-[17px] font-bold ${x.c}">${formatTime(x.t)}</span>
                                         </div>
                                     </div>
                                 `).join('')}
                             </div>
 
                             <!-- 새벽 시간 데이터 -->
-                            <div class="bg-gray-900 p-3 sm:p-4 rounded-2xl border border-gray-800 shadow-lg">
-                                <h2 class="text-[11px] uppercase text-gray-500 font-bold mb-3 flex items-center gap-1"><i data-lucide="sunrise" class="w-3.5 h-3.5"></i> 새벽 데이터</h2>
+                            <div class="bg-gray-900 p-3.5 sm:p-4 rounded-2xl border border-gray-800 shadow-lg min-w-[280px] snap-center shrink-0">
+                                <h2 class="text-[14px] sm:text-[16px] uppercase text-gray-500 font-bold mb-3 flex items-center gap-1.5"><i data-lucide="sunrise" class="w-4 h-4 text-blue-300"></i> 새벽 데이터</h2>
                                 ${[
                                     {l:'천문박명 시작', t:state.data?.astroDawn, c:'text-blue-500'},
                                     {l:'항해박명 시작', t:state.data?.nautDawn, c:'text-blue-300'},
                                     {l:'시민박명 시작', t:state.data?.civilDawn, c:'text-yellow-500'},
                                     {l:'일출', t:state.data?.sunrise, c:'text-orange-400'}
                                 ].map(x => `
-                                    <div class="flex flex-col py-1.5 border-b border-gray-800/60 last:border-0">
-                                        <span class="text-[10px] text-gray-400 mb-1">${x.l}</span>
-                                        <div class="flex justify-between items-center">
+                                    <div class="flex justify-between items-center py-2 border-b border-gray-800/60 last:border-0">
+                                        <span class="text-[14px] sm:text-[15px] font-bold ${x.c} whitespace-nowrap mr-2">${x.l}</span>
+                                        <div class="flex items-center text-right shrink-0">
                                             ${formatDateBox(x.t)} 
-                                            <span class="font-mono text-[11px] font-bold ${x.c}">${formatTime(x.t)}</span>
+                                            <span class="font-mono text-[15px] sm:text-[17px] font-bold ${x.c}">${formatTime(x.t)}</span>
                                         </div>
                                     </div>
                                 `).join('')}
                             </div>
-                            
+
+                            <!-- 천체 출몰 및 월령 정보 -->
+                            <div class="bg-gray-900 p-3.5 sm:p-4 rounded-2xl border border-gray-800 shadow-lg min-w-[280px] snap-center shrink-0">
+                                <h2 class="text-[14px] sm:text-[16px] uppercase text-gray-500 font-bold mb-3 flex items-center gap-1.5"><i data-lucide="info" class="w-4 h-4 text-gray-300"></i> 천체 출몰</h2>
+                                ${[
+                                    {l:'일출', t:state.data?.sunrise, c:'text-orange-400'},
+                                    {l:'일몰', t:state.data?.sunset, c:'text-orange-400'},
+                                    {l:'월출', t:state.data?.moonrise, c:'text-blue-300'},
+                                    {l:'월몰', t:state.data?.moonset, c:'text-orange-300'}
+                                ].map(x => `
+                                    <div class="flex justify-between items-center py-2 border-b border-gray-800/60 last:border-0">
+                                        <span class="text-[14px] sm:text-[15px] font-bold ${x.c} whitespace-nowrap mr-2">${x.l}</span>
+                                        <div class="flex items-center text-right shrink-0">
+                                            ${formatDateBox(x.t)} 
+                                            <span class="font-mono text-[15px] sm:text-[17px] font-bold ${x.c}">${formatTime(x.t)}</span>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                                <div class="flex justify-between items-center py-2 pt-2.5 border-t border-gray-700/60 mt-1">
+                                    <span class="text-[14px] sm:text-[15px] font-bold text-gray-300">월령</span>
+                                    <span class="font-bold text-[16px] sm:text-[18px] text-gray-100">${state.data?.moonAge}일</span>
+                                </div>
+                            </div>
                         </div>
+
                     </div>
                 `;
             } else if (state.view === 'moon') {
@@ -689,8 +670,8 @@
                     
                     gridHtml += `
                         <div class="flex flex-col items-center justify-center p-2 cursor-pointer transition-all ${isHomeSelected ? 'bg-blue-900/50 rounded-xl ring-2 ring-blue-400 shadow-[0_0_12px_rgba(59,130,246,0.6)]' : 'hover:bg-white/10 rounded-xl'}" onclick="openMoonDetail(${y}, ${m}, ${d})">
-                            <span class="mb-1.5 flex justify-center w-full">${moonSvg}</span>
-                            <span class="text-sm ${dateColor} font-bold">${d}</span>
+                            <span class="mb-2 flex justify-center w-full">${moonSvg}</span>
+                            <span class="text-base sm:text-lg ${dateColor} font-bold">${d}</span>
                         </div>
                     `;
                 }
@@ -762,7 +743,7 @@
                 }
 
                 app.innerHTML = `
-                    <div class="min-h-full night-sky relative p-4 pt-10">
+                    <div class="min-h-full night-sky relative p-4 pt-10 pb-24">
                         <header class="flex justify-between items-center mb-8 px-2">
                             <button onclick="changeMoonMonth(-1)" class="p-2 rounded-full hover:bg-white/10 transition-colors">
                                 <i data-lucide="chevron-left" class="w-6 h-6 text-gray-300"></i>
@@ -775,7 +756,7 @@
                         
                         <div class="grid grid-cols-7 gap-y-4 gap-x-1 mb-6">
                             ${['일', '월', '화', '수', '목', '금', '토'].map((day, i) => `
-                                <div class="text-center text-xs font-bold ${i === 0 ? 'text-red-400' : 'text-gray-400'} mb-2">${day}</div>
+                                <div class="text-center text-sm font-bold ${i === 0 ? 'text-red-400' : 'text-gray-400'} mb-2">${day}</div>
                             `).join('')}
                             ${gridHtml}
                         </div>
@@ -790,32 +771,35 @@
                                 <h2 class="text-lg font-bold flex items-center gap-2"><i data-lucide="map" class="w-5 h-5"></i> 관측지 설정</h2>
                                 <button onclick="getCurrentLocation()" class="bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg flex items-center gap-1 text-xs text-blue-400 transition-colors"><i data-lucide="navigation" class="w-3.5 h-3.5"></i> 현위치</button>
                             </div>
-                            <div class="flex gap-2">
-                                <div class="flex flex-col w-1/2">
-                                    <span class="text-[10px] text-gray-500 font-bold mb-1 pl-1">위도</span>
-                                    <input id="lat-input" type="text" value="${state.location.lat.toFixed(4)}" placeholder="위도" class="w-full bg-gray-800 p-3 rounded-xl text-white text-sm outline-none focus:border-blue-500 border border-transparent">
+                            
+                            <!-- 위치 설정 영역: 위도, 경도, 버튼 1줄 통합 구조 가운데 정렬 -->
+                            <div class="flex justify-center items-center gap-2 overflow-x-auto whitespace-nowrap scrollbar-hide py-2 w-full">
+                                <div class="flex items-center gap-1.5 shrink-0 bg-gray-900 px-3 py-2 rounded-xl border border-gray-800">
+                                    <span class="text-sm font-bold text-gray-400">위도</span>
+                                    <input id="lat-input" type="text" value="${state.location.lat.toFixed(4)}" class="w-20 bg-gray-800 p-1.5 rounded-lg text-white text-sm outline-none text-center font-mono">
                                 </div>
-                                <div class="flex flex-col w-1/2">
-                                    <span class="text-[10px] text-gray-500 font-bold mb-1 pl-1">경도</span>
-                                    <input id="lng-input" type="text" value="${state.location.lng.toFixed(4)}" placeholder="경도" class="w-full bg-gray-800 p-3 rounded-xl text-white text-sm outline-none focus:border-blue-500 border border-transparent">
+                                <div class="flex items-center gap-1.5 shrink-0 bg-gray-900 px-3 py-2 rounded-xl border border-gray-800">
+                                    <span class="text-sm font-bold text-gray-400">경도</span>
+                                    <input id="lng-input" type="text" value="${state.location.lng.toFixed(4)}" class="w-20 bg-gray-800 p-1.5 rounded-lg text-white text-sm outline-none text-center font-mono">
                                 </div>
-                            </div>
-                            <div class="flex gap-2">
-                                <button onclick="findLocation()" class="w-1/3 bg-gray-700 hover:bg-gray-600 p-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-1"><i data-lucide="search" class="w-4 h-4"></i>찾기</button>
-                                <button onclick="saveToList()" class="w-1/3 bg-gray-700 hover:bg-gray-600 p-3 rounded-xl text-sm transition-colors flex items-center justify-center gap-1"><i data-lucide="bookmark" class="w-4 h-4"></i>저장</button>
-                                <button onclick="confirmLocation()" class="w-1/3 bg-blue-600 hover:bg-blue-500 p-3 rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-1"><i data-lucide="check" class="w-4 h-4"></i>설정</button>
+                                <div class="flex items-center gap-1.5 shrink-0">
+                                    <button onclick="findLocation()" class="bg-gray-700 hover:bg-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold transition-colors flex items-center gap-1.5"><i data-lucide="search" class="w-4 h-4"></i>찾기</button>
+                                    <button onclick="saveToList()" class="bg-gray-700 hover:bg-gray-600 px-4 py-2.5 rounded-xl text-sm font-bold transition-colors flex items-center gap-1.5"><i data-lucide="bookmark" class="w-4 h-4"></i>저장</button>
+                                    <button onclick="confirmLocation()" class="bg-blue-600 hover:bg-blue-500 px-4 py-2.5 rounded-xl text-sm font-bold transition-colors flex items-center gap-1.5"><i data-lucide="check" class="w-4 h-4"></i>설정</button>
+                                </div>
                             </div>
                             
-                            <div class="mt-2">
-                                <div class="text-xs text-gray-500 mb-2">저장된 위치 (최대 3개)</div>
-                                <div class="flex gap-2 overflow-x-auto scrollbar-hide">
+                            <!-- 저장된 위치 가운데 정렬 및 글자/버튼 크기 상향 -->
+                            <div class="mt-4 text-center">
+                                <div class="text-sm font-bold text-gray-400 mb-3">저장된 위치 (최대 3개)</div>
+                                <div class="flex justify-center gap-3 overflow-x-auto scrollbar-hide pb-1">
                                     ${state.savedLocations.map((loc, i) => `
-                                        <div class="bg-gray-800 border border-gray-700 px-3 py-1.5 rounded-full text-xs flex items-center gap-2 flex-shrink-0">
-                                            <span class="cursor-pointer hover:text-blue-400" onclick="moveToSaved(${loc.lat}, ${loc.lng})">${loc.name}</span>
-                                            <i data-lucide="x" class="w-3 h-3 cursor-pointer text-gray-500 hover:text-red-400" onclick="deleteLocation(${i})"></i>
+                                        <div class="bg-gray-800 border border-gray-700 px-4 py-2 rounded-full text-sm flex items-center gap-2 flex-shrink-0 shadow-md">
+                                            <span class="cursor-pointer hover:text-blue-400 font-bold" onclick="moveToSaved(${loc.lat}, ${loc.lng})">${loc.name}</span>
+                                            <i data-lucide="x" class="w-4 h-4 cursor-pointer text-gray-500 hover:text-red-400 ml-1" onclick="deleteLocation(${i})"></i>
                                         </div>
                                     `).join('')}
-                                    ${state.savedLocations.length === 0 ? '<span class="text-xs text-gray-600">저장된 위치가 없습니다.</span>' : ''}
+                                    ${state.savedLocations.length === 0 ? '<span class="text-sm text-gray-600">저장된 위치가 없습니다.</span>' : ''}
                                 </div>
                             </div>
                         </div>
