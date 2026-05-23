@@ -163,12 +163,12 @@
             location: JSON.parse(localStorage.getItem('dsd_loc')) || { lat: 35.22, lng: 128.68, name: "창원시 성산구 관측지" },
             savedLocations: JSON.parse(localStorage.getItem('saved_locs')) || [],
             data: null,
-            weather: { current: null, mergedForecast: [], omHourly: [], daily: null },
+            weather: { current: null, mergedForecast: [], dailyForecast: [], omHourly: [], daily: null },
             isLoadingWeather: false,
             showMoonModal: false,
             modalDate: null,
             moonViewDate: new Date(),
-            editingIndex: null // 저장된 위치 편집 중인 인덱스
+            editingIndex: null 
         };
 
         let map = null;
@@ -187,13 +187,27 @@
                 const days = ['일', '월', '화', '수', '목', '금', '토'];
                 const d = state.date || now;
                 const dayOfWeek = days[d.getDay()];
-                // 선택한 날짜에 맞추어 요일을 추가하여 출력
                 dateEl.textContent = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} (${dayOfWeek})`;
                 lstEl.textContent = `LST ${now.toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
                 utcEl.textContent = `UTC ${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}:${String(now.getUTCSeconds()).padStart(2, '0')}`;
             }
         }
         setInterval(updateClocks, 1000);
+
+        // --- 타임존 무관한 세이프 로컬 날짜 파서 ---
+        function parseLocalISOString(tStr) {
+            if (!tStr) return new Date();
+            const parts = tStr.split('T');
+            const dateParts = parts[0].split('-');
+            const timeParts = parts[1].split(':');
+            return new Date(
+                parseInt(dateParts[0]),
+                parseInt(dateParts[1]) - 1,
+                parseInt(dateParts[2]),
+                parseInt(timeParts[0]),
+                0, 0
+            );
+        }
 
         // --- 십진수 위경도를 도분초(DMS) 포맷으로 변환하는 함수 ---
         function toDMS(val, isLat) {
@@ -425,7 +439,7 @@
                 let omHourlyArray = [];
                 for (let i = 0; i < omData.hourly.time.length; i++) {
                     omHourlyArray.push({
-                        time: new Date(omData.hourly.time[i]),
+                        time: parseLocalISOString(omData.hourly.time[i]),
                         temp: omData.hourly.temperature_2m[i],
                         humidity: omData.hourly.relative_humidity_2m[i],
                         dewPoint: omData.hourly.dew_point_2m[i],
@@ -449,11 +463,17 @@
                 let stMap = {};
                 if (stData && stData.init && stData.dataseries) {
                     const initStr = stData.init.toString();
-                    const initUTC = Date.UTC(initStr.slice(0,4), parseInt(initStr.slice(4,6))-1, initStr.slice(6,8), initStr.slice(8,10));
+                    const initYear = parseInt(initStr.substring(0, 4));
+                    const initMonth = parseInt(initStr.substring(4, 6)) - 1;
+                    const initDay = parseInt(initStr.substring(6, 8));
+                    const initHour = parseInt(initStr.substring(8, 10));
+                    const initUTC = Date.UTC(initYear, initMonth, initDay, initHour);
+
                     stData.dataseries.forEach(s => {
                         const targetTime = new Date(initUTC + s.timepoint * 3600000);
                         const key = `${targetTime.getFullYear()}-${targetTime.getMonth()}-${targetTime.getDate()}-${targetTime.getHours()}`;
                         stMap[key] = s;
+                        stMap[initUTC + s.timepoint * 3600000] = s; 
                     });
                 }
 
@@ -493,6 +513,79 @@
                 }
                 
                 state.weather.mergedForecast = mergedList;
+
+                // --- 3. 일자별 통합예보 수립 (7일 분량, 매일 밤 20시~새벽 4시 평균) ---
+                let dailyList = [];
+                for (let d = 0; d < 7; d++) {
+                    const targetDate = new Date(now);
+                    targetDate.setDate(now.getDate() + d);
+                    targetDate.setHours(12, 0, 0, 0); // 정오 기준
+
+                    const nightStart = new Date(targetDate);
+                    nightStart.setHours(20, 0, 0, 0);
+                    const nightEnd = new Date(targetDate);
+                    nightEnd.setDate(targetDate.getDate() + 1);
+                    nightEnd.setHours(4, 0, 0, 0);
+
+                    const nightHours = omHourlyArray.filter(h => h.time >= nightStart && h.time <= nightEnd);
+
+                    if (nightHours.length > 0) {
+                        let tempSum = 0, cloudSum = 0, cloudLowSum = 0, cloudMidSum = 0, cloudHighSum = 0;
+                        let codes = [];
+                        nightHours.forEach(nh => {
+                            tempSum += nh.temp;
+                            cloudSum += nh.cloud;
+                            cloudLowSum += nh.cloudLow;
+                            cloudMidSum += nh.cloudMid;
+                            cloudHighSum += nh.cloudHigh;
+                            codes.push(nh.code);
+                        });
+
+                        const avgTemp = Math.round(tempSum / nightHours.length);
+                        const avgCloud = Math.round(cloudSum / nightHours.length);
+                        const avgCloudLow = Math.round(cloudLowSum / nightHours.length);
+                        const avgCloudMid = Math.round(cloudMidSum / nightHours.length);
+                        const avgCloudHigh = Math.round(cloudHighSum / nightHours.length);
+
+                        const modeCode = codes.sort((a,b) => codes.filter(v=>v===a).length - codes.filter(v=>v===b).length).pop();
+                        const wInfo = getWeatherDesc(modeCode, false); 
+
+                        // 7Timer! 밤시간 데이터 평균 추출
+                        let sSumCloud = 0, sSumSeeing = 0, sSumTrans = 0, sCount = 0;
+                        for (const [k, s] of Object.entries(stMap)) {
+                            const parts = k.split('-');
+                            if (parts.length === 4) {
+                                const t = new Date(parseInt(parts[0]), parseInt(parts[1]), parseInt(parts[2]), parseInt(parts[3]), 0, 0);
+                                if (!isNaN(t.getTime()) && t >= nightStart && t <= nightEnd) {
+                                    sSumCloud += parseInt(s.cloudcover);
+                                    sSumSeeing += parseInt(s.seeing);
+                                    sSumTrans += parseInt(s.transparency);
+                                    sCount++;
+                                }
+                            }
+                        }
+
+                        const avgCloud7 = sCount > 0 ? Math.round(sSumCloud / sCount) : null;
+                        const avgSeeing = sCount > 0 ? Math.round(sSumSeeing / sCount) : null;
+                        const avgTrans = sCount > 0 ? Math.round(sSumTrans / sCount) : null;
+
+                        dailyList.push({
+                            dateStr: `${targetDate.getMonth()+1}.${targetDate.getDate()}`,
+                            dayName: ['일', '월', '화', '수', '목', '금', '토'][targetDate.getDay()],
+                            temp: avgTemp,
+                            icon: wInfo.icon,
+                            color: wInfo.color,
+                            cloudOM: avgCloud,
+                            cloudLow: avgCloudLow,
+                            cloudMid: avgCloudMid,
+                            cloudHigh: avgCloudHigh,
+                            cloud7Grade: avgCloud7 !== null ? get7TimerGrade(avgCloud7, 'cloud') : { text: '-', color: 'text-gray-500' },
+                            seeingGrade: avgSeeing !== null ? get7TimerGrade(avgSeeing, 'seeing') : { text: '-', color: 'text-gray-500' },
+                            transparencyGrade: avgTrans !== null ? get7TimerGrade(avgTrans, 'transparency') : { text: '-', color: 'text-gray-500' }
+                        });
+                    }
+                }
+                state.weather.dailyForecast = dailyList;
 
             } catch (e) {
                 console.error("전체 기상정보 처리 실패:", e);
@@ -558,12 +651,13 @@
             return { svg: renderRealisticMoon(phase, size), name: name };
         }
 
-        // --- 저장된 위치 인라인 수정 제어 함수들 ---
+        // --- 인라인 관측지 이름 편집 모드 관련 함수 ---
         function startEditing(index) {
             state.editingIndex = index;
             renderApp();
         }
 
+        // --- 모달 제어 ---
         function cancelEditing() {
             state.editingIndex = null;
             renderApp();
@@ -759,7 +853,7 @@
                 col.scrollTo({ top: index * 36, behavior: 'auto' }); 
             };
             sync('year', y); sync('month', m); sync('day', d);
-            setTimeout(() => isSyncing = false, 150);
+            setTimeout(() => isSyncing = false, 500); 
         }
 
         function handleWheelScroll() {
@@ -806,8 +900,8 @@
             }
         }
 
-        function goToToday() { state.date = new Date(); calculateData(true); }
-        function setDateFromPicker(e) { if (e.target.value) { state.date = new Date(e.target.value); calculateData(true); } }
+        function goToToday() { state.date = new Date(); calculateData(true); setTimeout(syncWheelScrolls, 50); }
+        function setDateFromPicker(e) { if (e.target.value) { state.date = new Date(e.target.value); calculateData(true); setTimeout(syncWheelScrolls, 50); } }
 
         // --- 앱 뷰 관리 ---
         function setView(v) { 
@@ -986,16 +1080,6 @@
         }
 
         // --- 저장된 위치 인라인 수정 제어 함수들 ---
-        function startEditing(index) {
-            state.editingIndex = index;
-            renderApp();
-        }
-
-        function cancelEditing() {
-            state.editingIndex = null;
-            renderApp();
-        }
-
         function saveEditedName(index) {
             const input = document.getElementById(`edit-name-input-${index}`);
             if(input) {
@@ -1178,10 +1262,10 @@
                 const firstDay = new Date(y, m, 1).getDay();
                 const daysInMonth = new Date(y, m + 1, 0).getDate();
                 
-                // 가로 너비 부족 시 스냅 스크롤이 되도록 구성하는 달 달력 (음력, 월령, 일출/몰, 월출/몰 통합)
+                // 가로 너비 부족 시 스냅 스크롤이 되도록 구성하는 달 달력 (음력, 월령, 월출/몰 통합)
                 let gridHtml = '';
                 for (let i = 0; i < firstDay; i++) { 
-                    gridHtml += `<div class="bg-gray-900/10 border border-gray-800/30 p-2 min-h-[135px]"></div>`; 
+                    gridHtml += `<div class="bg-gray-900/10 border border-gray-800/30 p-2 min-h-[145px]"></div>`; 
                 }
 
                 for (let d = 1; d <= daysInMonth; d++) {
@@ -1192,11 +1276,6 @@
                     
                     // 기획안 이미지(image_dc59a8.png) 반영 및 고정밀 설삭망 테이블 기반 음력 추출
                     const lunarDateStr = getApproximateLunarDate(currentDate);
-                    
-                    // 일출/일몰
-                    const sunTimes = SunCalc.getTimes(currentDate, state.location.lat, state.location.lng);
-                    const sunriseStr = formatTime(sunTimes.sunrise);
-                    const sunsetStr = formatTime(sunTimes.sunset);
                     
                     // 월출/월몰
                     const moonTimes = SunCalc.getMoonTimes(currentDate, state.location.lat, state.location.lng);
@@ -1211,39 +1290,37 @@
                     else if (isSaturday) dateColor = 'text-blue-400';
                     
                     gridHtml += `
-                        <div class="bg-gray-900/60 border border-gray-800/80 p-2.5 min-h-[135px] flex flex-col justify-between cursor-pointer transition-all ${isHomeSelected ? 'bg-blue-950/40 ring-2 ring-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.25)]' : 'hover:bg-gray-800/30'}" onclick="openMoonDetail(${y}, ${m}, ${d})">
-                            <!-- 날짜 (폰트 20% 상향 조정) -->
+                        <div class="bg-gray-900/60 border border-gray-800/80 p-2.5 min-h-[145px] flex flex-col justify-between cursor-pointer transition-all ${isHomeSelected ? 'bg-blue-950/40 ring-2 ring-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.25)]' : 'hover:bg-gray-800/30'}" onclick="openMoonDetail(${y}, ${m}, ${d})">
+                            <!-- 날짜 (폰트 상향 조정 16px) -->
                             <div class="flex justify-between items-start">
-                                <span class="text-[14px] sm:text-[15px] font-black ${dateColor}">${String(d).padStart(2, '0')}</span>
+                                <span class="text-[16px] sm:text-[17px] font-black ${dateColor}">${String(d).padStart(2, '0')}</span>
                             </div>
                             
-                            <!-- 달 위상 이미지 및 음력날짜 / 월령 (폰트 20% 상향 및 줄바꿈 방지) -->
-                            <div class="flex items-center gap-1.5 my-1.5">
+                            <!-- 달 위상 이미지 및 음력날짜 / 월령 (폰트 상향 및 줄바꿈 방지) -->
+                            <div class="flex items-center gap-1.5 my-1">
                                 <div class="shrink-0">${moonPhaseInfo.svg}</div>
-                                <div class="flex flex-col text-[10.5px] sm:text-[11px] text-gray-300 leading-tight">
-                                    <span class="font-black text-white whitespace-nowrap">${lunarDateStr}</span>
+                                <div class="flex flex-col text-[11px] sm:text-[11.5px] text-gray-300 leading-tight">
+                                    <span class="font-bold text-blue-300 whitespace-nowrap">${lunarDateStr}</span>
                                     <span class="text-gray-400 whitespace-nowrap">월령 ${moonAge.toFixed(1)}</span>
                                 </div>
                             </div>
                             
-                            <!-- 일출/몰, 월출/몰 타임라인 (폰트 20% 상향 및 줄바꿈 방지) -->
-                            <div class="text-[9px] sm:text-[9.5px] text-gray-400 leading-tight pt-1.5 border-t border-gray-800/60 space-y-0.5 font-mono whitespace-nowrap">
+                            <!-- 월출/몰 타임라인 (일출/몰 데이터 삭제 완료, 한 줄씩 폰트 크게 제공) -->
+                            <div class="text-[10.5px] sm:text-[11px] text-gray-300 leading-tight pt-1.5 border-t border-gray-800/60 space-y-1 font-mono whitespace-nowrap">
                                 <div class="flex justify-between">
-                                    <span>일출 ${sunriseStr}</span>
-                                    <span class="text-gray-600">|</span>
-                                    <span>일몰 ${sunsetStr}</span>
+                                    <span class="text-blue-300 font-bold">월출</span>
+                                    <span class="text-white font-bold">${moonriseStr}</span>
                                 </div>
-                                <div class="flex justify-between border-t border-gray-800/30 pt-0.5">
-                                    <span>월출 ${moonriseStr}</span>
-                                    <span class="text-gray-600">|</span>
-                                    <span>월몰 ${moonsetStr}</span>
+                                <div class="flex justify-between">
+                                    <span class="text-orange-400 font-bold">월몰</span>
+                                    <span class="text-white font-bold">${moonsetStr}</span>
                                 </div>
                             </div>
                         </div>
                     `;
                 }
 
-                // 모바일에서도 달력이 미려하게 가로 그리드를 유지하도록 overflow 및 min-width 적용 (더 큰 폰트 호환을 위해 min-w-[820px] 상향 조정)
+                // 모바일에서도 달력이 미려하게 가로 그리드를 유지하도록 overflow 및 min-width 적용 (더 큰 폰트 호환을 위해 min-w-[900px] 상향 조정)
                 app.innerHTML = `
                     <div class="min-h-full night-sky relative p-4 pt-6 pb-24">
                         <header class="flex justify-between items-center mb-6 px-2">
@@ -1257,7 +1334,7 @@
                         </header>
                         
                         <div class="w-full overflow-x-auto scrollbar-hide">
-                            <div class="min-w-[820px] bg-gray-950/40 p-3 rounded-3xl border border-gray-800 shadow-2xl backdrop-blur-md">
+                            <div class="min-w-[900px] bg-gray-950/40 p-3 rounded-3xl border border-gray-800 shadow-2xl backdrop-blur-md">
                                 <div class="grid grid-cols-7 gap-1">
                                     ${['일', '월', '화', '수', '목', '금', '토'].map((day, i) => `
                                         <div class="text-center text-xs font-bold ${i === 0 ? 'text-red-400' : (i === 6 ? 'text-blue-400' : 'text-gray-400')} py-2 border-b border-gray-800/60 mb-2">${day}</div>
@@ -1304,12 +1381,14 @@
                                         <span class="text-white font-bold">${cur.humidity}% <span class="text-gray-600">|</span> ${cur.dewPoint}°C</span>
                                     </div>
                                     <div class="bg-gray-950/40 p-3 rounded-2xl border border-gray-800 flex flex-col justify-center">
-                                        <span class="text-gray-500 text-xs font-bold mb-1">풍속 / 풍향</span>
-                                        <span class="text-white font-bold">${cur.wind}m/s <span class="text-blue-300">(${cur.windDir})</span></span>
+                                        <!-- 날씨 탭의 바람 정보: 풍향이 풍속 앞에 오도록 레이아웃 수정 적용 -->
+                                        <span class="text-gray-500 text-xs font-bold mb-1">풍향 / 풍속</span>
+                                        <span class="text-white font-bold"><span class="text-blue-300">${cur.windDir}</span> / ${cur.wind}m/s</span>
                                     </div>
                                     <div class="bg-gray-950/40 p-3 rounded-2xl border border-gray-800 flex flex-col justify-center col-span-2">
+                                        <!-- 날씨 탭의 바람 정보: 순간풍속 풍향/풍속 순서 정렬 수정 적용 -->
                                         <span class="text-gray-500 text-xs font-bold mb-1">최대 순간 풍속 / 풍향</span>
-                                        <span class="text-white font-bold text-orange-400">${cur.gust}m/s <span class="text-gray-400">(${cur.gustDir})</span></span>
+                                        <span class="text-white font-bold text-orange-400"><span class="text-gray-300">(${cur.gustDir})</span> ${cur.gust}m/s</span>
                                     </div>
                                 </div>
 
@@ -1348,7 +1427,7 @@
                         currentHtml = `<div class="text-center py-10 text-red-400 text-sm font-bold bg-gray-900 rounded-xl">현재 날씨를 불러오는데 실패했습니다.</div>`;
                     }
 
-                    // --- 시간대별 통합 예보 카드 렌더링 (구름 고도 상세 및 시잉/투명도 완벽 연동) ---
+                    // --- 시간대별 통합 예보 카드 렌더링 ---
                     let hourlyHtml = '';
                     if (state.weather.mergedForecast && state.weather.mergedForecast.length > 0) {
                         hourlyHtml = `
@@ -1356,10 +1435,9 @@
                                 <h3 class="text-lg font-bold text-gray-200 flex items-center gap-2"><i data-lucide="clock" class="w-5 h-5 text-blue-400"></i> 시간대별 통합 예보 (천체/상세구름)</h3>
                                 <span class="text-xs text-yellow-500 font-bold bg-yellow-900/20 px-2 py-1 rounded-full border border-yellow-700/30 whitespace-nowrap">가로 스크롤 👉</span>
                             </div>
-                            <div class="w-full overflow-x-auto scrollbar-hide scroll-container snap-x pt-2 pb-6">
+                            <div class="w-full overflow-x-auto scrollbar-hide scroll-container snap-x pt-2 pb-4">
                                 <div class="flex flex-nowrap gap-3 w-max min-w-full">
                                     ${state.weather.mergedForecast.map(h => {
-                                        // 옵셔널 체이닝 및 기본값 지정으로 에러 미연에 방지
                                         const cloud7 = h.cloud7Grade || { text: '-', color: 'text-gray-500' };
                                         const transparency = h.transparencyGrade || { text: '-', color: 'text-gray-500' };
                                         const seeing = h.seeingGrade || { text: '-', color: 'text-gray-500' };
@@ -1373,9 +1451,10 @@
                                             
                                             <!-- 관측 상세 및 수치 정보 -->
                                             <div class="w-full space-y-2 bg-gray-950/60 p-2.5 rounded-xl border border-gray-800/80 shadow-inner text-[11px] font-bold">
-                                                <div class="flex justify-between items-center border-b border-gray-800/50 pb-1.5 mb-1.5">
+                                                <div class="flex justify-between items-center border-b border-gray-800/50 pb-1.5 mb-1.5 font-mono">
                                                     <span class="text-gray-400 flex items-center gap-1"><i data-lucide="wind" class="w-3 h-3"></i>바람</span>
-                                                    <span class="text-gray-200 truncate max-w-[65%]">${h.wind}m/s (${h.windDir})</span>
+                                                    <!-- 바람 정보: 풍향이 풍속 앞에 오도록 수정 적용 -->
+                                                    <span class="text-gray-200 truncate max-w-[65%]">${h.windDir} / ${h.wind}m/s</span>
                                                 </div>
                                                 <div class="flex justify-between items-center">
                                                     <span class="text-gray-400 flex items-center gap-1"><i data-lucide="cloud" class="w-3 h-3"></i>구름%</span>
@@ -1410,7 +1489,61 @@
                             </div>
                         `;
                     }
-                    weatherContent = currentHtml + hourlyHtml;
+
+                    // --- 일자별 통합 예보 카드 렌더링 ---
+                    let dailyHtml = '';
+                    if (state.weather.dailyForecast && state.weather.dailyForecast.length > 0) {
+                        dailyHtml = `
+                            <div class="mb-2 flex justify-between items-end px-1 mt-6">
+                                <h3 class="text-lg font-bold text-gray-200 flex items-center gap-2"><i data-lucide="calendar" class="w-5 h-5 text-purple-400"></i> 일자별 통합 예보 (7일간)</h3>
+                                <span class="text-xs text-yellow-500 font-bold bg-yellow-900/20 px-2 py-1 rounded-full border border-yellow-700/30 whitespace-nowrap">가로 스크롤 👉</span>
+                            </div>
+                            <div class="w-full overflow-x-auto scrollbar-hide scroll-container snap-x pt-2 pb-6">
+                                <div class="flex flex-nowrap gap-3 w-max min-w-full">
+                                    ${state.weather.dailyForecast.map(d => {
+                                        const cloud7 = d.cloud7Grade || { text: '-', color: 'text-gray-500' };
+                                        const transparency = d.transparencyGrade || { text: '-', color: 'text-gray-500' };
+                                        const seeing = d.seeingGrade || { text: '-', color: 'text-gray-500' };
+                                        
+                                        return `
+                                        <div class="bg-gray-800/90 p-4 rounded-[1.5rem] border border-gray-700 w-[160px] shrink-0 snap-center flex flex-col items-center shadow-xl relative overflow-hidden">
+                                            <span class="text-purple-400 text-xs font-bold mb-1">${d.dayName}요일</span>
+                                            <span class="text-white font-black text-xl mb-2">${d.dateStr}</span>
+                                            <i data-lucide="${d.icon}" class="w-10 h-10 mb-2 ${d.color} drop-shadow-md"></i>
+                                            <span class="text-2xl font-black text-white mb-3">${d.temp}°</span>
+                                            
+                                            <!-- 관측 상세 및 수치 정보 (고해상도 일자별 분석) -->
+                                            <div class="w-full space-y-2 bg-gray-950/60 p-2.5 rounded-xl border border-gray-800/80 shadow-inner text-[11px] font-bold">
+                                                <div class="flex justify-between items-center">
+                                                    <span class="text-gray-400 flex items-center gap-1"><i data-lucide="cloud" class="w-3 h-3"></i>구름%</span>
+                                                    <span class="text-gray-200">${d.cloudOM}%</span>
+                                                </div>
+                                                <div class="text-[10px] text-gray-500 flex flex-col pl-4 gap-0.5 border-l border-gray-800/80">
+                                                    <span>상층: ${d.cloudHigh}%</span>
+                                                    <span>중층: ${d.cloudMid}%</span>
+                                                    <span>하층: ${d.cloudLow}%</span>
+                                                </div>
+                                                <div class="flex justify-between items-center">
+                                                    <span class="text-gray-400 flex items-center gap-1"><i data-lucide="cloud-off" class="w-3 h-3 text-yellow-500"></i>구름(7T)</span>
+                                                    <span class="${cloud7.color}">${cloud7.text}</span>
+                                                </div>
+                                                <div class="flex justify-between items-center">
+                                                    <span class="text-gray-400 flex items-center gap-1"><i data-lucide="eye" class="w-3 h-3 text-purple-400"></i>투명도</span>
+                                                    <span class="${transparency.color}">${transparency.text}</span>
+                                                </div>
+                                                <div class="flex justify-between items-center">
+                                                    <span class="text-gray-400 flex items-center gap-1"><i data-lucide="stars" class="w-3 h-3 text-orange-400"></i>시잉</span>
+                                                    <span class="${seeing.color}">${seeing.text}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        `;
+                    }
+                    weatherContent = currentHtml + hourlyHtml + dailyHtml;
                 }
 
                 app.innerHTML = `
