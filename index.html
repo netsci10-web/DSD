@@ -226,6 +226,19 @@
             );
         }
 
+        // --- 타임존 독립적 Open-Meteo 로컬 시간 -> UTC Epoch 변환 가이드 함수 ---
+        function parseLocalISOToUTC(isoStr, offsetSeconds) {
+            const parts = isoStr.split('T');
+            const dateParts = parts[0].split('-');
+            const timeParts = parts[1].split(':');
+            const y = parseInt(dateParts[0]);
+            const m = parseInt(dateParts[1]) - 1;
+            const d = parseInt(dateParts[2]);
+            const h = parseInt(timeParts[0]);
+            const rawUTCEpoch = Date.UTC(y, m, d, h, 0, 0);
+            return rawUTCEpoch - (offsetSeconds * 1000);
+        }
+
         // --- 십진수 위경도를 도분초(DMS) 포맷으로 변환하는 함수 ---
         function toDMS(val, isLat) {
             const hemisphere = isLat 
@@ -237,6 +250,526 @@
             const m = Math.floor(mVal);
             const s = ((mVal - m) * 60).toFixed(1);
             return `${hemisphere} ${d}° ${m}′ ${s}″`;
+        }
+
+        // --- 요일 계산 전용 유틸리티 ---
+        function getDayOfWeekKorean(t) {
+            if (!t || isNaN(t.getTime())) return '';
+            return ['일', '월', '화', '수', '목', '금', '토'][t.getDay()];
+        }
+
+        // --- 날짜 박스 뱃지 렌더링 ---
+        function formatDateBox(t) {
+            if (!t || isNaN(t.getTime())) return '';
+            const dayOfWeek = getDayOfWeekKorean(t);
+            return `<span class="bg-gray-800 border border-gray-700 text-gray-300 px-1.5 py-0.5 rounded text-[10px] sm:text-xs shadow-sm flex-shrink-0">${t.getMonth() + 1}/${t.getDate()}(${dayOfWeek})</span>`;
+        }
+
+        // --- 유효한 월출/몰 이벤트 비교 검증 ---
+        function getValidMoonEvent(eventToday, eventNext, dusk, dawn) {
+            if (eventToday && eventToday >= dusk && eventToday <= dawn) return eventToday;
+            if (eventNext && eventNext >= dusk && eventNext <= dawn) return eventNext;
+            return null;
+        }
+
+        // --- 고정밀 음력 날짜 계산기 (합삭 테이블 기반 100% 정밀 대조 및 메타 객체 반환) ---
+        function getApproximateLunarDate(date) {
+            const d = new Date(date);
+            d.setHours(12, 0, 0, 0);
+            
+            let matched = null;
+            for (let i = 0; i < LUNAR_MONTHS.length; i++) {
+                const startSolar = new Date(LUNAR_MONTHS[i].s);
+                startSolar.setHours(12, 0, 0, 0);
+                if (startSolar <= d) {
+                    matched = { startSolar, record: LUNAR_MONTHS[i] };
+                }
+            }
+            
+            if (!matched) {
+                return { lunarMonth: 1, lunarDay: 1, isLeap: false, formatted: "알 수 없음" };
+            }
+            
+            const diffTime = d.getTime() - matched.startSolar.getTime();
+            const diffDays = Math.floor(diffTime / 86400000);
+            const lunarDay = diffDays + 1;
+            
+            const leapPrefix = matched.record.l ? "윤" : "";
+            const formatted = `${leapPrefix}${String(matched.record.m).padStart(2, '0')}월 ${String(lunarDay).padStart(2, '0')}일`;
+            
+            return {
+                lunarMonth: matched.record.m,
+                lunarDay: lunarDay,
+                isLeap: matched.record.l,
+                formatted: formatted
+            };
+        }
+
+        // --- 마우스 드래그 스크롤 활성화 (데스크톱 및 모바일 가로스크롤 호환) ---
+        function enableDragScroll() {
+            const sliders = document.querySelectorAll('.scroll-container');
+            sliders.forEach(slider => {
+                let isDown = false;
+                let startX;
+                let scrollLeft;
+                slider.addEventListener('mousedown', (e) => {
+                    isDown = true;
+                    startX = e.pageX - slider.offsetLeft;
+                    scrollLeft = slider.scrollLeft;
+                });
+                slider.addEventListener('mouseleave', () => { isDown = false; });
+                slider.addEventListener('mouseup', () => { isDown = false; });
+                slider.addEventListener('mousemove', (e) => {
+                    if (!isDown) return;
+                    e.preventDefault();
+                    const x = e.pageX - slider.offsetLeft;
+                    const walk = (x - startX) * 1.5; 
+                    slider.scrollLeft = scrollLeft - walk;
+                });
+            });
+        }
+
+        // --- 풍향 각도를 한글 방위로 변환 ---
+        function getWindDirectionKorean(deg) {
+            if (deg == null) return '-';
+            const directions = ["북", "북북동", "북동", "동북동", "동", "동남동", "남동", "남남동", "남", "남남서", "남서", "서남서", "서", "서북서", "북서", "북북서"];
+            const index = Math.round(((deg % 360) / 22.5)) % 16;
+            return directions[index];
+        }
+
+        // --- 역 지오코딩 Nominatim API (시도군구동읍면 + 관측지 생성) ---
+        async function getAddressName(lat, lng) {
+            try {
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=14&accept-language=ko`);
+                const data = await res.json();
+                if(data && data.address) {
+                    const a = data.address;
+                    const city = a.city || a.province || a.state || '';
+                    const borough = a.borough || a.county || a.district || '';
+                    const neighborhood = a.town || a.village || a.suburb || a.neighborhood || a.dong || a.road || '';
+                    const fullName = `${city} ${borough} ${neighborhood}`.trim().replace(/\s+/g, ' ');
+                    if(fullName) return `${fullName} 관측지`;
+                }
+            } catch(e) { console.warn("역지오코딩 변환 실패:", e); }
+            return `관측지 (${lat.toFixed(2)}, ${lng.toFixed(2)})`;
+        }
+
+        // --- 주소 및 행정 정보 검색 처리 ---
+        async function searchLocation() {
+            const query = document.getElementById('search-input').value.trim();
+            if(!query) return;
+
+            const resultDropdown = document.getElementById('search-results');
+            resultDropdown.innerHTML = '<div class="text-xs text-gray-500 p-3 flex items-center gap-1.5"><i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i> 주소를 검색하는 중입니다...</div>';
+            resultDropdown.classList.remove('hidden');
+            lucide.createIcons();
+
+            try {
+                const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&accept-language=ko&limit=5`;
+                const res = await fetch(url);
+                const data = await res.json();
+
+                if(data && data.length > 0) {
+                    resultDropdown.innerHTML = data.map(item => {
+                        const displayName = item.display_name;
+                        return `
+                            <div class="p-2.5 hover:bg-gray-800 rounded-lg cursor-pointer transition-colors border-b border-gray-800/50 last:border-0" 
+                                 onclick="selectSearchResult(${item.lat}, ${item.lon}, '${displayName.replace(/'/g, "\\'")}')">
+                                <div class="text-xs font-bold text-gray-200">${displayName}</div>
+                                <div class="text-[10px] text-gray-500 font-mono mt-0.5">위도: ${parseFloat(item.lat).toFixed(4)}, 경도: ${parseFloat(item.lon).toFixed(4)}</div>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    resultDropdown.innerHTML = '<div class="text-xs text-gray-500 p-3">일치하는 검색 결과가 없습니다.</div>';
+                }
+            } catch(e) {
+                console.error("검색 오버헤드 실패:", e);
+                resultDropdown.innerHTML = '<div class="text-xs text-red-400 p-3">검색에 실패했습니다.</div>';
+            }
+            lucide.createIcons();
+        }
+
+        // --- 검색결과 선택 수립 ---
+        async function selectSearchResult(lat, lon, displayName) {
+            document.getElementById('lat-input').value = parseFloat(lat).toFixed(4);
+            document.getElementById('lng-input').value = parseFloat(lon).toFixed(4);
+            document.getElementById('search-results').classList.add('hidden');
+
+            let nameParts = displayName.split(',').map(p => p.trim()).reverse();
+            const filtered = nameParts.filter(p => p !== '대한민국' && p !== 'Korea' && p !== 'South Korea');
+            document.getElementById('search-input').value = filtered.slice(0, 3).join(' ');
+
+            findLocation();
+        }
+
+        // --- 날씨 코드 파싱 ---
+        function getWeatherDesc(code, isDay = true) {
+            if(code === 0) return {desc: '맑음', icon: isDay ? 'sun' : 'moon', color: 'text-yellow-400'};
+            if(code === 1 || code === 2) return {desc: '구름 조금', icon: 'cloud-sun', color: 'text-gray-300'};
+            if(code === 3) return {desc: '흐림', icon: 'cloud', color: 'text-gray-400'};
+            if(code >= 45 && code <= 48) return {desc: '안개', icon: 'cloud-fog', color: 'text-gray-500'};
+            if(code >= 51 && code <= 69) return {desc: '비', icon: 'cloud-rain', color: 'text-blue-400'};
+            if(code >= 71 && code <= 79) return {desc: '눈', icon: 'snowflake', color: 'text-white'};
+            if(code >= 80 && code <= 99) return {desc: '뇌우', icon: 'cloud-lightning', color: 'text-indigo-400'};
+            return {desc: '알 수 없음', icon: 'cloud', color: 'text-gray-500'};
+        }
+
+        // --- 기상청/7Timer! 기상 데이터 통합 산출 ---
+        async function fetchWeatherData() {
+            state.isLoadingWeather = true;
+            renderApp();
+
+            const lat = state.location.lat;
+            const lng = state.location.lng;
+
+            try {
+                // 1. Open-Meteo 상세 기상 변수 수집 (16일 최대 DSD 예보 확장을 위해 forecast_days=16 명시 적용)
+                const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,dew_point_2m,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,precipitation,visibility,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high&hourly=temperature_2m,relative_humidity_2m,dew_point_2m,weather_code,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,precipitation_probability,visibility,wind_speed_10m,wind_direction_10m,wind_gusts_10m&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=16`;
+                const res = await fetch(omUrl);
+                const omData = await res.json();
+
+                // 2. 7Timer 천체 예보 수집 (allorigins proxy 우회)
+                let stData = null;
+                const stUrl = `https://www.7timer.info/bin/api.pl?lon=${lng}&lat=${lat}&product=astro&output=json`;
+                try {
+                    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(stUrl)}`;
+                    const stRes = await fetch(proxyUrl);
+                    const proxyJson = await stRes.json();
+                    stData = JSON.parse(proxyJson.contents);
+                } catch(e) { console.warn("7Timer 수집 실패"); }
+
+                // --- 현재 실황 수립 ---
+                const cur = omData.current;
+                const curWInfo = getWeatherDesc(cur.weather_code);
+                const visKm = (cur.visibility / 1000).toFixed(1);
+                let visStatus = "불량", visColor = "bg-red-500";
+                if (cur.visibility >= 10000) { visStatus = "양호"; visColor = "bg-blue-500"; }
+                else if (cur.visibility >= 5000) { visStatus = "보통"; visColor = "bg-green-500"; }
+
+                state.weather.current = {
+                    temp: Math.round(cur.temperature_2m),
+                    humidity: Math.round(cur.relative_humidity_2m),
+                    dewPoint: Math.round(cur.dew_point_2m),
+                    wind: cur.wind_speed_10m.toFixed(1),
+                    windDir: getWindDirectionKorean(cur.wind_direction_10m),
+                    gust: cur.wind_gusts_10m ? cur.wind_gusts_10m.toFixed(1) : '0.0',
+                    gustDir: cur.wind_direction_10m ? getWindDirectionKorean(cur.wind_direction_10m) : '-',
+                    precipitation: cur.precipitation,
+                    cloud: cur.cloud_cover,
+                    cloudLow: cur.cloud_cover_low,
+                    cloudMid: cur.cloud_cover_mid,
+                    cloudHigh: cur.cloud_cover_high,
+                    visibility: visKm,
+                    desc: curWInfo.desc,
+                    icon: curWInfo.icon,
+                    color: curWInfo.color,
+                    visStatus, visColor
+                };
+
+                state.weather.daily = {
+                    max: Math.round(omData.daily.temperature_2m_max[0]),
+                    min: Math.round(omData.daily.temperature_2m_min[0])
+                };
+
+                // Open-Meteo 타임존 오프셋 구하기 (오차 보정용)
+                const offsetSeconds = omData.utc_offset_seconds || 0;
+
+                // 시간단위 기상 분석용 1시간 간격 어레이 수립 (타임존 독립적 정밀 UTC Epoch 연동)
+                let omHourlyArray = [];
+                for (let i = 0; i < omData.hourly.time.length; i++) {
+                    const utcEpoch = parseLocalISOToUTC(omData.hourly.time[i], offsetSeconds);
+                    omHourlyArray.push({
+                        time: parseLocalISOString(omData.hourly.time[i]),
+                        utcEpoch: utcEpoch, // 7Timer! 매핑용 절대 UTC Epoch 시간선
+                        temp: omData.hourly.temperature_2m[i],
+                        humidity: omData.hourly.relative_humidity_2m[i],
+                        dewPoint: omData.hourly.dew_point_2m[i],
+                        cloud: omData.hourly.cloud_cover[i],
+                        cloudLow: omData.hourly.cloud_cover_low[i],
+                        cloudMid: omData.hourly.cloud_cover_mid[i],
+                        cloudHigh: omData.hourly.cloud_cover_high[i],
+                        visibility: omData.hourly.visibility[i],
+                        code: omData.hourly.weather_code[i],
+                        wind: omData.hourly.wind_speed_10m[i],
+                        windDir: omData.hourly.wind_direction_10m[i],
+                        gust: omData.hourly.wind_gusts_10m[i]
+                    });
+                }
+                state.weather.omHourly = omHourlyArray;
+
+                // --- 7Timer! 천체 관측 예보 통합 (시간 오차 해결을 위해 epoch 매핑 기법 수립) ---
+                let mergedList = [];
+                const now = new Date();
+
+                let initUTC = 0;
+                if (stData && stData.init && stData.dataseries) {
+                    const initStr = stData.init.toString();
+                    const initYear = parseInt(initStr.substring(0, 4));
+                    const initMonth = parseInt(initStr.substring(4, 6)) - 1;
+                    const initDay = parseInt(initStr.substring(6, 8));
+                    const initHour = parseInt(initStr.substring(8, 10));
+                    initUTC = Date.UTC(initYear, initMonth, initDay, initHour);
+
+                    // 7Timer 매칭 상태를 각 Open-Meteo 슬롯에 확실히 밀착 매핑
+                    omHourlyArray.forEach(om => {
+                        let bestMatch = null;
+                        let minDiff = 1.5 * 3600000; // 최대 1.5시간 범위 내에 있어야 유효
+                        stData.dataseries.forEach(s => {
+                            const targetTime = new Date(initUTC + s.timepoint * 3600000);
+                            const diff = Math.abs(om.utcEpoch - targetTime.getTime());
+                            if (diff < minDiff) {
+                                minDiff = diff;
+                                bestMatch = s;
+                            }
+                        });
+                        om.stData = bestMatch; // Matched 7Timer object attached
+                    });
+                }
+
+                // 기상청 Open-Meteo의 24시간 범위 기준으로 순회하며 7Timer 데이터 병합
+                const curIdx = omHourlyArray.findIndex(om => om.time >= new Date(now.getTime() - 3600000));
+                const safeStartIdx = Math.max(0, curIdx);
+
+                const daysShort = ['일', '월', '화', '수', '목', '금', '토'];
+
+                for(let i = safeStartIdx; i < safeStartIdx + 24 && i < omHourlyArray.length; i++) {
+                    const om = omHourlyArray[i];
+                    const isDay = om.time.getHours() > 6 && om.time.getHours() < 19;
+                    const wInfo = getWeatherDesc(om.code, isDay);
+                    const s = om.stData;
+                    
+                    const dayOfWeek = daysShort[om.time.getDay()];
+
+                    mergedList.push({
+                        timeObj: om.time,
+                        // 시간별 날짜 텍스트를 text-sm sm:text-base로 키우고 괄호 요일 포함 적용
+                        dateWithDay: `${om.time.getMonth()+1}.${om.time.getDate()}(${dayOfWeek})`,
+                        hour: String(om.time.getHours()).padStart(2, '0'),
+                        temp: Math.round(om.temp),
+                        pop: omData.hourly.precipitation_probability[i] || 0,
+                        cloudOM: om.cloud,
+                        cloudLow: om.cloudLow,
+                        cloudMid: om.cloudMid,
+                        cloudHigh: om.cloudHigh,
+                        dewPoint: Math.round(om.dewPoint),
+                        humidity: om.humidity,
+                        wind: om.wind.toFixed(1),
+                        windDir: getWindDirectionKorean(om.windDir),
+                        gust: om.gust ? om.gust.toFixed(1) : '0.0',
+                        icon: wInfo.icon,
+                        color: wInfo.color,
+                        cloud7Grade: s ? get7TimerGrade(s.cloudcover, 'cloud') : { text: '-', color: 'text-gray-500' },
+                        seeingGrade: s ? get7TimerGrade(s.seeing, 'seeing') : { text: '-', color: 'text-gray-500' },
+                        transparencyGrade: s ? get7TimerGrade(s.transparency, 'transparency') : { text: '-', color: 'text-gray-500' }
+                    });
+                }
+                
+                state.weather.mergedForecast = mergedList;
+
+                // --- 3. 일자별 DSD 통합예보 수립 (16일 분량, 매일 실제 산출된 DSD 시작~종료 시간 평균 기반) ---
+                let dailyList = [];
+                for (let d = 0; d < 16; d++) {
+                    const targetDate = new Date(now);
+                    targetDate.setDate(now.getDate() + d);
+                    targetDate.setHours(12, 0, 0, 0); 
+
+                    // 각 일자별 DSD 윈도우 정밀 추산
+                    const sunTimes = SunCalc.getTimes(targetDate, lat, lng);
+                    const nextDay = new Date(targetDate.getTime() + 86400000);
+                    const sunTimesNext = SunCalc.getTimes(nextDay, lat, lng);
+                    const moonTimesToday = SunCalc.getMoonTimes(targetDate, lat, lng);
+                    const moonTimesNext = SunCalc.getMoonTimes(nextDay, lat, lng);
+
+                    const astroDusk = sunTimes.night;
+                    const astroDawn = sunTimesNext.nightEnd;
+
+                    let dsdStart = astroDusk;
+                    let dsdEnd = astroDawn;
+
+                    if (astroDusk && astroDawn && !isNaN(astroDusk.getTime()) && !isNaN(astroDawn.getTime())) {
+                        const moonSet = getValidMoonEvent(moonTimesToday.set, moonTimesNext.set, astroDusk, astroDawn);
+                        const moonRise = getValidMoonEvent(moonTimesToday.rise, moonTimesNext.rise, astroDusk, astroDawn);
+                        const moonPosAtDusk = SunCalc.getMoonPosition(astroDusk, lat, lng);
+                        const isMoonUpAtDusk = moonPosAtDusk.altitude > 0;
+
+                        if (isMoonUpAtDusk) {
+                            if (moonSet) dsdStart = moonSet;
+                            else dsdStart = null;
+                        }
+                        if (moonRise && dsdStart && moonRise > dsdStart) {
+                            dsdEnd = new Date(Math.min(dsdEnd.getTime(), moonRise.getTime()));
+                        }
+                    } else {
+                        dsdStart = null;
+                        dsdEnd = null;
+                    }
+
+                    // DSD 관측 불가일 때 백업용 타임라인 (야간 21:00 ~ 03:00 평균)
+                    const isDsdValid = (dsdStart && dsdEnd && dsdEnd > dsdStart);
+                    let filterStartEpoch, filterEndEpoch;
+
+                    if (isDsdValid) {
+                        filterStartEpoch = dsdStart.getTime();
+                        filterEndEpoch = dsdEnd.getTime();
+                    } else {
+                        // 지역 기준 타임라인 보정
+                        const midnightLocalEpoch = parseLocalISOToUTC(`${targetDate.getFullYear()}-${String(targetDate.getMonth()+1).padStart(2,'0')}-${String(targetDate.getDate()).padStart(2,'0')}T00:00`, offsetSeconds);
+                        filterStartEpoch = midnightLocalEpoch + 20 * 3600000; // 20:00 local time
+                        filterEndEpoch = midnightLocalEpoch + 28 * 3600000;  // 04:00 (next day) local time
+                    }
+
+                    // 해당 일자 DSD 밤시간에 위치하는 기상 데이터 필터링 (절대 에포크 비교)
+                    const dsdHours = omHourlyArray.filter(h => h.utcEpoch >= filterStartEpoch && h.utcEpoch <= filterEndEpoch);
+
+                    if (dsdHours.length > 0) {
+                        let tempSum = 0, cloudSum = 0, cloudLowSum = 0, cloudMidSum = 0, cloudHighSum = 0, humiditySum = 0;
+                        let codes = [];
+                        let sSumCloud = 0, sSumSeeing = 0, sSumTrans = 0, sCount = 0;
+
+                        dsdHours.forEach(nh => {
+                            tempSum += nh.temp;
+                            cloudSum += nh.cloud;
+                            cloudLowSum += nh.cloudLow;
+                            cloudMidSum += nh.cloudMid;
+                            cloudHighSum += nh.cloudHigh;
+                            humiditySum += nh.humidity;
+                            codes.push(nh.code);
+
+                            if (nh.stData) {
+                                sSumCloud += parseInt(nh.stData.cloudcover);
+                                sSumSeeing += parseInt(nh.stData.seeing);
+                                sSumTrans += parseInt(nh.stData.transparency);
+                                sCount++;
+                            }
+                        });
+
+                        const avgTemp = Math.round(tempSum / dsdHours.length);
+                        const avgCloud = Math.round(cloudSum / dsdHours.length);
+                        const avgCloudLow = Math.round(cloudLowSum / dsdHours.length);
+                        const avgCloudMid = Math.round(cloudMidSum / dsdHours.length);
+                        const avgCloudHigh = Math.round(cloudHighSum / dsdHours.length);
+                        const avgHumidity = Math.round(humiditySum / dsdHours.length);
+
+                        const modeCode = codes.sort((a,b) => codes.filter(v=>v===a).length - codes.filter(v=>v===b).length).pop();
+                        const wInfo = getWeatherDesc(modeCode, false); 
+
+                        // sSumCloud, sSumSeeing, sSumTrans, sCount 집계를 중복 없이 안전하게 사용하도록 설정 완료
+                        const avgCloud7 = sCount > 0 ? Math.round(sSumCloud / sCount) : null;
+                        const avgSeeing = sCount > 0 ? Math.round(sSumSeeing / sCount) : null;
+                        const avgTrans = sCount > 0 ? Math.round(sSumTrans / sCount) : null;
+
+                        // 관측불가를 '관측곤란'으로 명칭 변경 및 괄호 구조 정립
+                        let dsdTimeText = isDsdValid ? `${formatTime(dsdStart)} ~ ${formatTime(dsdEnd)}` : '관측곤란';
+                        let dsdDurText = "";
+                        if (isDsdValid) {
+                            const diffMs = dsdEnd.getTime() - dsdStart.getTime();
+                            const hrs = Math.floor(diffMs / 3600000);
+                            const mins = Math.floor((diffMs % 3600000) / 60000);
+                            dsdDurText = `(총 ${hrs}시간 ${mins}분)`;
+                        }
+
+                        dailyList.push({
+                            dateStr: `${targetDate.getMonth()+1}.${targetDate.getDate()}`,
+                            dayName: ['일', '월', '화', '수', '목', '금', '토'][targetDate.getDay()],
+                            temp: avgTemp,
+                            humidity: avgHumidity,
+                            icon: wInfo.icon,
+                            color: wInfo.color,
+                            cloudOM: avgCloud,
+                            cloudLow: avgCloudLow,
+                            cloudMid: avgCloudMid,
+                            cloudHigh: avgCloudHigh,
+                            cloud7Grade: avgCloud7 !== null ? get7TimerGrade(avgCloud7, 'cloud') : { text: '-', color: 'text-gray-500' },
+                            seeingGrade: avgSeeing !== null ? get7TimerGrade(avgSeeing, 'seeing') : { text: '-', color: 'text-gray-500' },
+                            transparencyGrade: avgTrans !== null ? get7TimerGrade(avgTrans, 'transparency') : { text: '-', color: 'text-gray-500' },
+                            dsdValid: isDsdValid,
+                            dsdTimeStr: dsdTimeText,
+                            dsdDurStr: dsdDurText
+                        });
+                    }
+                }
+                state.weather.dailyForecast = dailyList;
+
+            } catch (e) {
+                console.error("전체 기상정보 처리 실패:", e);
+                state.weather.current = null;
+            }
+
+            state.isLoadingWeather = false;
+            calculateData(false); 
+        }
+
+        // --- 천체 좌표 계산 ---
+        function getMoonZodiac(date) {
+            if (!date || isNaN(date.getTime())) return "알 수 없음";
+            const jd = (date.getTime() / 86400000) + 2440587.5;
+            const d = jd - 2451545.0; 
+            let L = (218.316 + 13.176396 * d) % 360;
+            if (L < 0) L += 360;
+            let M = (134.963 + 13.064993 * d) % 360;
+            if (M < 0) M += 360;
+            let lambda = (L + 6.289 * Math.sin(M * Math.PI / 180)) % 360;
+            if (lambda < 0) lambda += 360;
+            const zodiacs = ["양자리", "황소자리", "쌍둥이자리", "게자리", "사자자리", "처녀자리", "천칭자리", "전갈자리", "궁수자리", "염소자리", "물병자리", "물고기자리"];
+            return zodiacs[Math.floor(lambda / 30)] || "알 수 없음";
+        }
+
+        function renderRealisticMoon(phase, size = 40) {
+            let rx = Math.max(0.001, 0.5 * Math.abs(Math.cos(phase * 2 * Math.PI)));
+            let path = "";
+            if (phase <= 0.5) {
+                let sweep = phase <= 0.25 ? 0 : 1;
+                path = `M 0.5,0 A 0.5,0.5 0 0,1 0.5,1 A ${rx},0.5 0 0,${sweep} 0.5,0 Z`;
+            } else {
+                let sweep = phase <= 0.75 ? 0 : 1;
+                path = `M 0.5,0 A 0.5,0.5 0 0,0 0.5,1 A ${rx},0.5 0 0,${sweep} 0.5,0 Z`;
+            }
+            const imgUrl = "https://upload.wikimedia.org/wikipedia/commons/e/e1/FullMoon2010.jpg";
+            const uid = Math.random().toString(36).substring(2, 9);
+            const clipId = `moonClip-${uid}`;
+            return `
+                <div style="position: relative; width: ${size}px; height: ${size}px; border-radius: 50%; background: #000; box-shadow: 0 0 8px rgba(255,255,255,0.15); display: inline-flex; overflow: hidden; flex-shrink: 0;">
+                    <svg width="0" height="0" style="position: absolute; width: 0; height: 0;">
+                        <defs><clipPath id="${clipId}" clipPathUnits="objectBoundingBox"><path d="${path}" /></clipPath></defs>
+                    </svg>
+                    <img src="${imgUrl}" alt="moon" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.2; filter: grayscale(100%);" crossorigin="anonymous">
+                    <div style="position: absolute; inset: 0; clip-path: url(#${clipId}); -webkit-clip-path: url(#${clipId});">
+                        <img src="${imgUrl}" alt="moon" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: grayscale(100%);" crossorigin="anonymous">
+                    </div>
+                    <div style="position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(255,255,255,0.15);"></div>
+                </div>
+            `;
+        }
+
+        function getMoonPhaseInfo(phase, size = 40) {
+            let name = "";
+            if (phase < 0.03 || phase > 0.97) name = "신월 (삭)";
+            else if (phase < 0.22) name = "초승달";
+            else if (phase < 0.28) name = "상현달";
+            else if (phase < 0.47) name = "상현 이후";
+            else if (phase < 0.53) name = "보름달 (망)";
+            else if (phase < 0.72) name = "하현 이전";
+            else if (phase < 0.78) name = "하현달";
+            else name = "그믐달";
+            return { svg: renderRealisticMoon(phase, size), name: name };
+        }
+
+        // --- 인라인 관측지 이름 편집 모드 관련 함수 ---
+        function startEditing(index) {
+            state.editingIndex = index;
+            renderApp();
+        }
+
+        // --- 모달 제어 ---
+        function cancelEditing() {
+            state.editingIndex = null;
+            renderApp();
+        }
+
+        function formatTime(t) {
+            if (!t || isNaN(t.getTime())) return '--:--';
+            return t.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
         }
 
         // --- 요일 계산 전용 유틸리티 ---
@@ -422,461 +955,85 @@
             return { text, color };
         }
 
-        // --- 기상청/7Timer! 기상 데이터 통합 산출 ---
-        async function fetchWeatherData() {
-            state.isLoadingWeather = true;
-            renderApp();
+        // --- 위치 설정 및 지도 이동 ---
+        function findLocation() {
+            const lat = parseFloat(document.getElementById('lat-input').value);
+            const lng = parseFloat(document.getElementById('lng-input').value);
+            if (!isNaN(lat) && !isNaN(lng) && map) { 
+                map.setView([lat, lng], 10); 
+                marker.setLatLng([lat, lng]); 
+            }
+        }
 
-            const lat = state.location.lat;
-            const lng = state.location.lng;
+        async function saveToList() {
+            const lat = parseFloat(document.getElementById('lat-input').value);
+            const lng = parseFloat(document.getElementById('lng-input').value);
+            if (!isNaN(lat) && !isNaN(lng)) {
+                const name = await getAddressName(lat, lng);
+                const newLoc = { lat, lng, name };
+                state.savedLocations = [newLoc, ...state.savedLocations.filter(l => l.lat !== lat || l.lng !== lng)].slice(0, 3);
+                localStorage.setItem('saved_locs', JSON.stringify(state.savedLocations));
+                showToast('위치가 목록에 저장되었습니다.');
+                renderApp();
+            }
+        }
 
-            try {
-                // 1. Open-Meteo 상세 기상 변수 수집 (16일 최대 DSD 예보 확장을 위해 forecast_days=16 명시 적용)
-                const omUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,dew_point_2m,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,precipitation,visibility,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high&hourly=temperature_2m,relative_humidity_2m,dew_point_2m,weather_code,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,precipitation_probability,visibility,wind_speed_10m,wind_direction_10m,wind_gusts_10m&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=16`;
-                const res = await fetch(omUrl);
-                const omData = await res.json();
+        async function confirmLocation() {
+            const lat = parseFloat(document.getElementById('lat-input').value);
+            const lng = parseFloat(document.getElementById('lng-input').value);
+            if (!isNaN(lat) && !isNaN(lng)) {
+                const name = await getAddressName(lat, lng);
+                state.location = { lat, lng, name };
+                localStorage.setItem('dsd_loc', JSON.stringify(state.location));
+                state.weather.omHourly = [];
+                state.weather.mergedForecast = [];
+                fetchWeatherData(); 
+                setView('home');
+            }
+        }
 
-                // 2. 7Timer 천체 예보 수집 (allorigins proxy 우회)
-                let stData = null;
-                const stUrl = `https://www.7timer.info/bin/api.pl?lon=${lng}&lat=${lat}&product=astro&output=json`;
-                try {
-                    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(stUrl)}`;
-                    const stRes = await fetch(proxyUrl);
-                    const proxyJson = await stRes.json();
-                    stData = JSON.parse(proxyJson.contents);
-                } catch(e) { console.warn("7Timer 수집 실패"); }
-
-                // --- 현재 실황 수립 ---
-                const cur = omData.current;
-                const curWInfo = getWeatherDesc(cur.weather_code);
-                const visKm = (cur.visibility / 1000).toFixed(1);
-                let visStatus = "불량", visColor = "bg-red-500";
-                if (cur.visibility >= 10000) { visStatus = "양호"; visColor = "bg-blue-500"; }
-                else if (cur.visibility >= 5000) { visStatus = "보통"; visColor = "bg-green-500"; }
-
-                state.weather.current = {
-                    temp: Math.round(cur.temperature_2m),
-                    humidity: Math.round(cur.relative_humidity_2m),
-                    dewPoint: Math.round(cur.dew_point_2m),
-                    wind: cur.wind_speed_10m.toFixed(1),
-                    windDir: getWindDirectionKorean(cur.wind_direction_10m),
-                    gust: cur.wind_gusts_10m ? cur.wind_gusts_10m.toFixed(1) : '0.0',
-                    gustDir: cur.wind_direction_10m ? getWindDirectionKorean(cur.wind_direction_10m) : '-',
-                    precipitation: cur.precipitation,
-                    cloud: cur.cloud_cover,
-                    cloudLow: cur.cloud_cover_low,
-                    cloudMid: cur.cloud_cover_mid,
-                    cloudHigh: cur.cloud_cover_high,
-                    visibility: visKm,
-                    desc: curWInfo.desc,
-                    icon: curWInfo.icon,
-                    color: curWInfo.color,
-                    visStatus, visColor
-                };
-
-                state.weather.daily = {
-                    max: Math.round(omData.daily.temperature_2m_max[0]),
-                    min: Math.round(omData.daily.temperature_2m_min[0])
-                };
-
-                // 시간단위 기상 분석용 1시간 간격 어레이 수립
-                let omHourlyArray = [];
-                for (let i = 0; i < omData.hourly.time.length; i++) {
-                    omHourlyArray.push({
-                        time: parseLocalISOString(omData.hourly.time[i]),
-                        temp: omData.hourly.temperature_2m[i],
-                        humidity: omData.hourly.relative_humidity_2m[i],
-                        dewPoint: omData.hourly.dew_point_2m[i],
-                        cloud: omData.hourly.cloud_cover[i],
-                        cloudLow: omData.hourly.cloud_cover_low[i],
-                        cloudMid: omData.hourly.cloud_cover_mid[i],
-                        cloudHigh: omData.hourly.cloud_cover_high[i],
-                        visibility: omData.hourly.visibility[i],
-                        code: omData.hourly.weather_code[i],
-                        wind: omData.hourly.wind_speed_10m[i],
-                        windDir: omData.hourly.wind_direction_10m[i],
-                        gust: omData.hourly.wind_gusts_10m[i]
-                    });
-                }
-                state.weather.omHourly = omHourlyArray;
-
-                // --- 7Timer! 천체 관측 예보 통합 (시간 오차 해결을 위해 epoch 매핑 기법 수립) ---
-                let mergedList = [];
-                const now = new Date();
-
-                let initUTC = 0;
-                if (stData && stData.init && stData.dataseries) {
-                    const initStr = stData.init.toString();
-                    const initYear = parseInt(initStr.substring(0, 4));
-                    const initMonth = parseInt(initStr.substring(4, 6)) - 1;
-                    const initDay = parseInt(initStr.substring(6, 8));
-                    const initHour = parseInt(initStr.substring(8, 10));
-                    initUTC = Date.UTC(initYear, initMonth, initDay, initHour);
-
-                    // 7Timer 매칭 상태를 각 Open-Meteo 슬롯에 확실히 밀착 매핑
-                    omHourlyArray.forEach(om => {
-                        let bestMatch = null;
-                        let minDiff = 1.5 * 3600000; // 최대 1.5시간 범위 내에 있어야 유효
-                        stData.dataseries.forEach(s => {
-                            const targetTime = new Date(initUTC + s.timepoint * 3600000);
-                            const diff = Math.abs(om.time.getTime() - targetTime.getTime());
-                            if (diff < minDiff) {
-                                minDiff = diff;
-                                bestMatch = s;
-                            }
-                        });
-                        om.stData = bestMatch; // Matched 7Timer object attached
-                    });
-                }
-
-                // 기상청 Open-Meteo의 24시간 범위 기준으로 순회하며 7Timer 데이터 병합
-                const curIdx = omHourlyArray.findIndex(om => om.time >= new Date(now.getTime() - 3600000));
-                const safeStartIdx = Math.max(0, curIdx);
-
-                const daysShort = ['일', '월', '화', '수', '목', '금', '토'];
-
-                for(let i = safeStartIdx; i < safeStartIdx + 24 && i < omHourlyArray.length; i++) {
-                    const om = omHourlyArray[i];
-                    const isDay = om.time.getHours() > 6 && om.time.getHours() < 19;
-                    const wInfo = getWeatherDesc(om.code, isDay);
-                    const s = om.stData;
-                    
-                    const dayOfWeek = daysShort[om.time.getDay()];
-
-                    mergedList.push({
-                        timeObj: om.time,
-                        // 시간별 날짜 텍스트를 text-sm sm:text-base로 키우고 괄호 요일 포함 적용
-                        dateWithDay: `${om.time.getMonth()+1}.${om.time.getDate()}(${dayOfWeek})`,
-                        hour: String(om.time.getHours()).padStart(2, '0'),
-                        temp: Math.round(om.temp),
-                        pop: omData.hourly.precipitation_probability[i] || 0,
-                        cloudOM: om.cloud,
-                        cloudLow: om.cloudLow,
-                        cloudMid: om.cloudMid,
-                        cloudHigh: om.cloudHigh,
-                        dewPoint: Math.round(om.dewPoint),
-                        humidity: om.humidity,
-                        wind: om.wind.toFixed(1),
-                        windDir: getWindDirectionKorean(om.windDir),
-                        gust: om.gust ? om.gust.toFixed(1) : '0.0',
-                        icon: wInfo.icon,
-                        color: wInfo.color,
-                        cloud7Grade: s ? get7TimerGrade(s.cloudcover, 'cloud') : { text: '-', color: 'text-gray-500' },
-                        seeingGrade: s ? get7TimerGrade(s.seeing, 'seeing') : { text: '-', color: 'text-gray-500' },
-                        transparencyGrade: s ? get7TimerGrade(s.transparency, 'transparency') : { text: '-', color: 'text-gray-500' }
-                    });
-                }
-                
-                state.weather.mergedForecast = mergedList;
-
-                // --- 3. 일자별 DSD 통합예보 수립 (16일 분량, 매일 실제 산출된 DSD 시작~종료 시간 평균 기반) ---
-                let dailyList = [];
-                for (let d = 0; d < 16; d++) {
-                    const targetDate = new Date(now);
-                    targetDate.setDate(now.getDate() + d);
-                    targetDate.setHours(12, 0, 0, 0); 
-
-                    // 각 일자별 DSD 윈도우 정밀 추산
-                    const sunTimes = SunCalc.getTimes(targetDate, lat, lng);
-                    const nextDay = new Date(targetDate.getTime() + 86400000);
-                    const sunTimesNext = SunCalc.getTimes(nextDay, lat, lng);
-                    const moonTimesToday = SunCalc.getMoonTimes(targetDate, lat, lng);
-                    const moonTimesNext = SunCalc.getMoonTimes(nextDay, lat, lng);
-
-                    const astroDusk = sunTimes.night;
-                    const astroDawn = sunTimesNext.nightEnd;
-
-                    let dsdStart = astroDusk;
-                    let dsdEnd = astroDawn;
-
-                    if (astroDusk && astroDawn && !isNaN(astroDusk.getTime()) && !isNaN(astroDawn.getTime())) {
-                        const moonSet = getValidMoonEvent(moonTimesToday.set, moonTimesNext.set, astroDusk, astroDawn);
-                        const moonRise = getValidMoonEvent(moonTimesToday.rise, moonTimesNext.rise, astroDusk, astroDawn);
-                        const moonPosAtDusk = SunCalc.getMoonPosition(astroDusk, lat, lng);
-                        const isMoonUpAtDusk = moonPosAtDusk.altitude > 0;
-
-                        if (isMoonUpAtDusk) {
-                            if (moonSet) dsdStart = moonSet;
-                            else dsdStart = null;
-                        }
-                        if (moonRise && dsdStart && moonRise > dsdStart) {
-                            dsdEnd = new Date(Math.min(dsdEnd.getTime(), moonRise.getTime()));
-                        }
-                    } else {
-                        dsdStart = null;
-                        dsdEnd = null;
+        function getCurrentLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(async (position) => {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    const latInput = document.getElementById('lat-input');
+                    const lngInput = document.getElementById('lng-input');
+                    if(latInput && lngInput) {
+                        latInput.value = lat.toFixed(4);
+                        lngInput.value = lng.toFixed(4);
+                        findLocation();
                     }
-
-                    // DSD 관측 불가일 때 백업용 타임라인 (야간 21:00 ~ 03:00 평균)
-                    const filterStart = (dsdStart && dsdEnd && dsdEnd > dsdStart) ? dsdStart : new Date(targetDate.getTime() + 9 * 3600000);
-                    const filterEnd = (dsdStart && dsdEnd && dsdEnd > dsdStart) ? dsdEnd : new Date(targetDate.getTime() + 15 * 3600000);
-
-                    // 해당 일자 DSD 밤시간에 위치하는 기상 데이터 필터링
-                    const dsdHours = omHourlyArray.filter(h => h.time >= filterStart && h.time <= filterEnd);
-
-                    if (dsdHours.length > 0) {
-                        let tempSum = 0, cloudSum = 0, cloudLowSum = 0, cloudMidSum = 0, cloudHighSum = 0, humiditySum = 0;
-                        let codes = [];
-                        let sSumCloud = 0, sSumSeeing = 0, sSumTrans = 0, sCount = 0;
-
-                        dsdHours.forEach(nh => {
-                            tempSum += nh.temp;
-                            cloudSum += nh.cloud;
-                            cloudLowSum += nh.cloudLow;
-                            cloudMidSum += nh.cloudMid;
-                            cloudHighSum += nh.cloudHigh;
-                            humiditySum += nh.humidity;
-                            codes.push(nh.code);
-
-                            if (nh.stData) {
-                                sSumCloud += parseInt(nh.stData.cloudcover);
-                                sSumSeeing += parseInt(nh.stData.seeing);
-                                sSumTrans += parseInt(nh.stData.transparency);
-                                sCount++;
-                            }
-                        });
-
-                        const avgTemp = Math.round(tempSum / dsdHours.length);
-                        const avgCloud = Math.round(cloudSum / dsdHours.length);
-                        const avgCloudLow = Math.round(cloudLowSum / dsdHours.length);
-                        const avgCloudMid = Math.round(cloudMidSum / dsdHours.length);
-                        const avgCloudHigh = Math.round(cloudHighSum / dsdHours.length);
-                        const avgHumidity = Math.round(humiditySum / dsdHours.length);
-
-                        const modeCode = codes.sort((a,b) => codes.filter(v=>v===a).length - codes.filter(v=>v===b).length).pop();
-                        const wInfo = getWeatherDesc(modeCode, false); 
-
-                        // sSumCloud, sSumSeeing, sSumTrans, sCount 집계를 중복 없이 안전하게 사용하도록 설정 완료
-                        const avgCloud7 = sCount > 0 ? Math.round(sSumCloud / sCount) : null;
-                        const avgSeeing = sCount > 0 ? Math.round(sSumSeeing / sCount) : null;
-                        const avgTrans = sCount > 0 ? Math.round(sSumTrans / sCount) : null;
-
-                        // 관측불가를 '관측곤란'으로 명칭 변경 및 괄호 구조 정립
-                        const isDsdValid = (dsdStart && dsdEnd && dsdEnd > dsdStart);
-                        let dsdTimeText = isDsdValid ? `${formatTime(dsdStart)} ~ ${formatTime(dsdEnd)}` : '관측곤란';
-                        let dsdDurText = "";
-                        if (isDsdValid) {
-                            const diffMs = dsdEnd.getTime() - dsdStart.getTime();
-                            const hrs = Math.floor(diffMs / 3600000);
-                            const mins = Math.floor((diffMs % 3600000) / 60000);
-                            dsdDurText = `(총 ${hrs}시간 ${mins}분)`;
-                        }
-
-                        dailyList.push({
-                            dateStr: `${targetDate.getMonth()+1}.${targetDate.getDate()}`,
-                            dayName: ['일', '월', '화', '수', '목', '금', '토'][targetDate.getDay()],
-                            temp: avgTemp,
-                            humidity: avgHumidity,
-                            icon: wInfo.icon,
-                            color: wInfo.color,
-                            cloudOM: avgCloud,
-                            cloudLow: avgCloudLow,
-                            cloudMid: avgCloudMid,
-                            cloudHigh: avgCloudHigh,
-                            cloud7Grade: avgCloud7 !== null ? get7TimerGrade(avgCloud7, 'cloud') : { text: '-', color: 'text-gray-500' },
-                            seeingGrade: avgSeeing !== null ? get7TimerGrade(avgSeeing, 'seeing') : { text: '-', color: 'text-gray-500' },
-                            transparencyGrade: avgTrans !== null ? get7TimerGrade(avgTrans, 'transparency') : { text: '-', color: 'text-gray-500' },
-                            dsdValid: isDsdValid,
-                            dsdTimeStr: dsdTimeText,
-                            dsdDurStr: dsdDurText
-                        });
-                    }
-                }
-                state.weather.dailyForecast = dailyList;
-
-            } catch (e) {
-                console.error("전체 기상정보 처리 실패:", e);
-                state.weather.current = null;
-            }
-
-            state.isLoadingWeather = false;
-            calculateData(false); 
+                }, () => showToast('위치 정보를 가져올 수 없습니다. 기기의 GPS 설정과 권한을 확인해주세요.'));
+            } else showToast('이 브라우저에서는 위치 정보(GPS)를 지원하지 않습니다.');
         }
 
-        // --- 천체 좌표 계산 ---
-        function getMoonZodiac(date) {
-            if (!date || isNaN(date.getTime())) return "알 수 없음";
-            const jd = (date.getTime() / 86400000) + 2440587.5;
-            const d = jd - 2451545.0; 
-            let L = (218.316 + 13.176396 * d) % 360;
-            if (L < 0) L += 360;
-            let M = (134.963 + 13.064993 * d) % 360;
-            if (M < 0) M += 360;
-            let lambda = (L + 6.289 * Math.sin(M * Math.PI / 180)) % 360;
-            if (lambda < 0) lambda += 360;
-            const zodiacs = ["양자리", "황소자리", "쌍둥이자리", "게자리", "사자자리", "처녀자리", "천칭자리", "전갈자리", "궁수자리", "염소자리", "물병자리", "물고기자리"];
-            return zodiacs[Math.floor(lambda / 30)] || "알 수 없음";
-        }
-
-        function renderRealisticMoon(phase, size = 40) {
-            let rx = Math.max(0.001, 0.5 * Math.abs(Math.cos(phase * 2 * Math.PI)));
-            let path = "";
-            if (phase <= 0.5) {
-                let sweep = phase <= 0.25 ? 0 : 1;
-                path = `M 0.5,0 A 0.5,0.5 0 0,1 0.5,1 A ${rx},0.5 0 0,${sweep} 0.5,0 Z`;
-            } else {
-                let sweep = phase <= 0.75 ? 0 : 1;
-                path = `M 0.5,0 A 0.5,0.5 0 0,0 0.5,1 A ${rx},0.5 0 0,${sweep} 0.5,0 Z`;
-            }
-            const imgUrl = "https://upload.wikimedia.org/wikipedia/commons/e/e1/FullMoon2010.jpg";
-            const uid = Math.random().toString(36).substring(2, 9);
-            const clipId = `moonClip-${uid}`;
-            return `
-                <div style="position: relative; width: ${size}px; height: ${size}px; border-radius: 50%; background: #000; box-shadow: 0 0 8px rgba(255,255,255,0.15); display: inline-flex; overflow: hidden; flex-shrink: 0;">
-                    <svg width="0" height="0" style="position: absolute; width: 0; height: 0;">
-                        <defs><clipPath id="${clipId}" clipPathUnits="objectBoundingBox"><path d="${path}" /></clipPath></defs>
-                    </svg>
-                    <img src="${imgUrl}" alt="moon" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.2; filter: grayscale(100%);" crossorigin="anonymous">
-                    <div style="position: absolute; inset: 0; clip-path: url(#${clipId}); -webkit-clip-path: url(#${clipId});">
-                        <img src="${imgUrl}" alt="moon" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: grayscale(100%);" crossorigin="anonymous">
-                    </div>
-                    <div style="position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(255,255,255,0.15);"></div>
-                </div>
-            `;
-        }
-
-        function getMoonPhaseInfo(phase, size = 40) {
-            let name = "";
-            if (phase < 0.03 || phase > 0.97) name = "신월 (삭)";
-            else if (phase < 0.22) name = "초승달";
-            else if (phase < 0.28) name = "상현달";
-            else if (phase < 0.47) name = "상현 이후";
-            else if (phase < 0.53) name = "보름달 (망)";
-            else if (phase < 0.72) name = "하현 이전";
-            else if (phase < 0.78) name = "하현달";
-            else name = "그믐달";
-            return { svg: renderRealisticMoon(phase, size), name: name };
-        }
-
-        // --- 인라인 관측지 이름 편집 모드 관련 함수 ---
-        function startEditing(index) {
-            state.editingIndex = index;
+        function deleteLocation(index) {
+            state.savedLocations.splice(index, 1);
+            localStorage.setItem('saved_locs', JSON.stringify(state.savedLocations));
             renderApp();
         }
 
-        // --- 모달 제어 ---
-        function cancelEditing() {
-            state.editingIndex = null;
-            renderApp();
+        // --- 지도 위 리스트 항목 이동용 ---
+        function moveToSaved(lat, lng) {
+            document.getElementById('lat-input').value = lat;
+            document.getElementById('lng-input').value = lng;
+            findLocation();
         }
 
-        function saveEditedName(index) {
-            const input = document.getElementById(`edit-name-input-${index}`);
-            if(input) {
-                const newName = input.value.trim();
-                if(newName) {
-                    state.savedLocations[index].name = newName;
-                    localStorage.setItem('saved_locs', JSON.stringify(state.savedLocations));
-                    state.editingIndex = null;
-                    renderApp();
-                } else {
-                    showToast("이름을 입력해 주세요.");
-                }
-            }
-        }
-
-        function formatTime(t) {
-            if (!t || isNaN(t.getTime())) return '--:--';
-            return t.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
-        }
-
-        // --- 천체 데이터 메인 계산 ---
-        function calculateData(updatePicker = true) {
-            const baseDate = new Date(state.date);
-            baseDate.setHours(12, 0, 0, 0); 
-            const nextDay = new Date(baseDate.getTime() + 86400000);
-
-            const sunTimes = SunCalc.getTimes(baseDate, state.location.lat, state.location.lng);
-            const sunTimesNext = SunCalc.getTimes(nextDay, state.location.lat, state.location.lng);
-            const moonTimesToday = SunCalc.getMoonTimes(baseDate, state.location.lat, state.location.lng);
-            const moonTimesNext = SunCalc.getMoonTimes(nextDay, state.location.lat, state.location.lng);
-            const moon = SunCalc.getMoonIllumination(baseDate);
-
-            const astroDusk = sunTimes.night;
-            const astroDawn = sunTimesNext.nightEnd;
-
-            let dsdStart = astroDusk;
-            let dsdEnd = astroDawn;
-            let dsdDurationStr = "0시간 0분";
-
-            if (!astroDusk || !astroDawn || isNaN(astroDusk.getTime()) || isNaN(astroDawn.getTime())) {
-                dsdStart = null;
-                dsdEnd = null;
-                dsdDurationStr = "관측 불가 (백야)";
-            } else {
-                const moonSet = getValidMoonEvent(moonTimesToday.set, moonTimesNext.set, astroDusk, astroDawn);
-                const moonRise = getValidMoonEvent(moonTimesToday.rise, moonTimesNext.rise, astroDusk, astroDawn);
-                const moonPosAtDusk = SunCalc.getMoonPosition(astroDusk, state.location.lat, state.location.lng);
-                const isMoonUpAtDusk = moonPosAtDusk.altitude > 0;
-
-                if (isMoonUpAtDusk) {
-                    if (moonSet) dsdStart = moonSet; 
-                    else dsdStart = null;
-                }
-                
-                if (moonRise && dsdStart && moonRise > dsdStart) {
-                    dsdEnd = new Date(Math.min(dsdEnd.getTime(), moonRise.getTime()));
-                }
-
-                if (dsdStart && dsdEnd && dsdEnd > dsdStart) {
-                    const dsdMs = dsdEnd.getTime() - dsdStart.getTime();
-                    dsdDurationStr = `${Math.floor(dsdMs / 3600000)}시간 ${Math.floor((dsdMs % 3600000) / 60000)}분`;
-                } else {
-                    dsdStart = null;
-                    dsdEnd = null;
-                    dsdDurationStr = "관측 불가 (달빛)";
-                }
-            }
-            
-            const phaseInfo = getMoonPhaseInfo(moon.phase, 64);
-            const moonAge = (moon.phase * 29.53058867).toFixed(1);
-
-            // DSD 구간의 평균 날씨 계산 (NaN 방어)
-            let dsdWeatherInfo = null;
-            if (state.weather.omHourly && state.weather.omHourly.length > 0 && dsdStart && dsdEnd) {
-                let cSum=0, tSum=0, hSum=0, vSum=0, count=0;
-                let codes = [];
-                state.weather.omHourly.forEach(h => {
-                    if (h.time >= dsdStart && h.time <= dsdEnd) {
-                        cSum += h.cloud; tSum += h.temp; hSum += h.humidity; vSum += h.visibility;
-                        codes.push(h.code); 
-                        count++;
-                    }
-                });
-                
-                if (count > 0) {
-                    const modeCode = codes.sort((a,b) => codes.filter(v=>v===a).length - codes.filter(v=>v===b).length).pop();
-                    const wInfo = getWeatherDesc(modeCode, false);
-                    const visKm = (vSum / count / 1000).toFixed(1);
-                    let visStatus = "bg-red-500", visColor = "bg-red-500";
-                    if (visKm >= 10) { visStatus = "양호"; visColor = "bg-blue-500"; }
-                    else if (visKm >= 5) { visStatus = "보통"; visColor = "bg-green-500"; }
-                    
-                    const avgCloud = Math.round(cSum/count);
-                    const descText = avgCloud < 30 ? "구름 조금" : (avgCloud < 70 ? "구름 많음" : "흐림/비");
-
-                    dsdWeatherInfo = {
-                        desc: descText, icon: wInfo.icon, color: wInfo.color,
-                        cloud: avgCloud, temp: Math.round(tSum/count), humidity: Math.round(hSum/count),
-                        visibility: visKm, visStatus, visColor
-                    };
-                }
-            }
-
-            state.data = {
-                sunset: sunTimes.sunset, civilDusk: sunTimes.dusk, nautDusk: sunTimes.nauticalDusk, astroDusk: astroDusk,
-                astroDawn: astroDawn, nautDawn: sunTimesNext.nauticalDawn, civilDawn: sunTimesNext.dawn, sunrise: sunTimesNext.sunrise,
-                dsdStart: dsdStart, dsdEnd: dsdEnd, dsdDuration: dsdDurationStr, moonPhaseSvg: phaseInfo.svg,
-                moonrise: moonTimesToday.rise, moonset: moonTimesToday.set, moonAge: moonAge,
-                dsdWeatherInfo
-            };
-            
-            renderApp();
-            if (updatePicker && state.view === 'home') {
-                buildWheelPicker();
-            } else {
-                updateNativePickerValue();
-            }
+        function initMap() {
+            const container = document.getElementById('map-container');
+            if (!container) return;
+            if (map !== null) { map.remove(); map = null; }
+            map = L.map('map-container').setView([state.location.lat, state.location.lng], 10);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+            marker = L.marker([state.location.lat, state.location.lng]).addTo(map);
+            map.on('click', (e) => {
+                marker.setLatLng(e.latlng);
+                document.getElementById('lat-input').value = e.latlng.lat.toFixed(4);
+                document.getElementById('lng-input').value = e.latlng.lng.toFixed(4);
+                findLocation();
+            });
         }
 
         // --- 휠 피커 제어 핵심 함수군 복원 완료 ---
@@ -1084,92 +1241,11 @@
             lucide.createIcons();
         }
 
-        // --- 위치 설정 및 지도 이동 ---
-        function findLocation() {
-            const lat = parseFloat(document.getElementById('lat-input').value);
-            const lng = parseFloat(document.getElementById('lng-input').value);
-            if (!isNaN(lat) && !isNaN(lng) && map) { 
-                map.setView([lat, lng], 10); 
-                marker.setLatLng([lat, lng]); 
-            }
-        }
-
-        async function saveToList() {
-            const lat = parseFloat(document.getElementById('lat-input').value);
-            const lng = parseFloat(document.getElementById('lng-input').value);
-            if (!isNaN(lat) && !isNaN(lng)) {
-                const name = await getAddressName(lat, lng);
-                const newLoc = { lat, lng, name };
-                state.savedLocations = [newLoc, ...state.savedLocations.filter(l => l.lat !== lat || l.lng !== lng)].slice(0, 3);
-                localStorage.setItem('saved_locs', JSON.stringify(state.savedLocations));
-                showToast('위치가 목록에 저장되었습니다.');
-                renderApp();
-            }
-        }
-
-        async function confirmLocation() {
-            const lat = parseFloat(document.getElementById('lat-input').value);
-            const lng = parseFloat(document.getElementById('lng-input').value);
-            if (!isNaN(lat) && !isNaN(lng)) {
-                const name = await getAddressName(lat, lng);
-                state.location = { lat, lng, name };
-                localStorage.setItem('dsd_loc', JSON.stringify(state.location));
-                state.weather.omHourly = [];
-                state.weather.mergedForecast = [];
-                fetchWeatherData(); 
-                setView('home');
-            }
-        }
-
-        function getCurrentLocation() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(async (position) => {
-                    const lat = position.coords.latitude;
-                    const lng = position.coords.longitude;
-                    const latInput = document.getElementById('lat-input');
-                    const lngInput = document.getElementById('lng-input');
-                    if(latInput && lngInput) {
-                        latInput.value = lat.toFixed(4);
-                        lngInput.value = lng.toFixed(4);
-                        findLocation();
-                    }
-                }, () => showToast('위치 정보를 가져올 수 없습니다. 기기의 GPS 설정과 권한을 확인해주세요.'));
-            } else showToast('이 브라우저에서는 위치 정보(GPS)를 지원하지 않습니다.');
-        }
-
-        function deleteLocation(index) {
-            state.savedLocations.splice(index, 1);
-            localStorage.setItem('saved_locs', JSON.stringify(state.savedLocations));
-            renderApp();
-        }
-
-        // --- 지도 위 리스트 항목 이동용 ---
-        function moveToSaved(lat, lng) {
-            document.getElementById('lat-input').value = lat;
-            document.getElementById('lng-input').value = lng;
-            findLocation();
-        }
-
-        function initMap() {
-            const container = document.getElementById('map-container');
-            if (!container) return;
-            if (map !== null) { map.remove(); map = null; }
-            map = L.map('map-container').setView([state.location.lat, state.location.lng], 10);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-            marker = L.marker([state.location.lat, state.location.lng]).addTo(map);
-            map.on('click', (e) => {
-                marker.setLatLng(e.latlng);
-                document.getElementById('lat-input').value = e.latlng.lat.toFixed(4);
-                document.getElementById('lng-input').value = e.latlng.lng.toFixed(4);
-                findLocation();
-            });
-        }
-
-        // --- 저장된 위치 인라인 수정 제어 함수들 ---
+        // --- 저장된 위치 수정 기능 복구 완료 ---
         function saveEditedName(index) {
-            const input = document.getElementById(`edit-name-input-${index}`);
-            if(input) {
-                const newName = input.value.trim();
+            const inputEl = document.getElementById(`edit-name-input-${index}`);
+            if(inputEl) {
+                const newName = inputEl.value.trim();
                 if(newName) {
                     state.savedLocations[index].name = newName;
                     localStorage.setItem('saved_locs', JSON.stringify(state.savedLocations));
@@ -1178,6 +1254,105 @@
                 } else {
                     showToast("이름을 입력해 주세요.");
                 }
+            }
+        }
+
+        // --- 천체 데이터 메인 계산 ---
+        function calculateData(updatePicker = true) {
+            const baseDate = new Date(state.date);
+            baseDate.setHours(12, 0, 0, 0); 
+            const nextDay = new Date(baseDate.getTime() + 86400000);
+
+            const sunTimes = SunCalc.getTimes(baseDate, state.location.lat, state.location.lng);
+            const sunTimesNext = SunCalc.getTimes(nextDay, state.location.lat, state.location.lng);
+            const moonTimesToday = SunCalc.getMoonTimes(baseDate, state.location.lat, state.location.lng);
+            const moonTimesNext = SunCalc.getMoonTimes(nextDay, state.location.lat, state.location.lng);
+            const moon = SunCalc.getMoonIllumination(baseDate);
+
+            const astroDusk = sunTimes.night;
+            const astroDawn = sunTimesNext.nightEnd;
+
+            let dsdStart = astroDusk;
+            let dsdEnd = astroDawn;
+            let dsdDurationStr = "0시간 0분";
+
+            if (!astroDusk || !astroDawn || isNaN(astroDusk.getTime()) || isNaN(astroDawn.getTime())) {
+                dsdStart = null;
+                dsdEnd = null;
+                dsdDurationStr = "관측 불가 (백야)";
+            } else {
+                const moonSet = getValidMoonEvent(moonTimesToday.set, moonTimesNext.set, astroDusk, astroDawn);
+                const moonRise = getValidMoonEvent(moonTimesToday.rise, moonTimesNext.rise, astroDusk, astroDawn);
+                const moonPosAtDusk = SunCalc.getMoonPosition(astroDusk, state.location.lat, state.location.lng);
+                const isMoonUpAtDusk = moonPosAtDusk.altitude > 0;
+
+                if (isMoonUpAtDusk) {
+                    if (moonSet) dsdStart = moonSet; 
+                    else dsdStart = null;
+                }
+                
+                if (moonRise && dsdStart && moonRise > dsdStart) {
+                    dsdEnd = new Date(Math.min(dsdEnd.getTime(), moonRise.getTime()));
+                }
+
+                if (dsdStart && dsdEnd && dsdEnd > dsdStart) {
+                    const dsdMs = dsdEnd.getTime() - dsdStart.getTime();
+                    dsdDurationStr = `${Math.floor(dsdMs / 3600000)}시간 ${Math.floor((dsdMs % 3600000) / 60000)}분`;
+                } else {
+                    dsdStart = null;
+                    dsdEnd = null;
+                    dsdDurationStr = "관측 불가 (달빛)";
+                }
+            }
+            
+            const phaseInfo = getMoonPhaseInfo(moon.phase, 64);
+            const moonAge = (moon.phase * 29.53058867).toFixed(1);
+
+            // DSD 구간의 평균 날씨 계산 (NaN 방어)
+            let dsdWeatherInfo = null;
+            if (state.weather.omHourly && state.weather.omHourly.length > 0 && dsdStart && dsdEnd) {
+                let cSum=0, tSum=0, hSum=0, vSum=0, count=0;
+                let codes = [];
+                state.weather.omHourly.forEach(h => {
+                    if (h.time >= dsdStart && h.time <= dsdEnd) {
+                        cSum += h.cloud; tSum += h.temp; hSum += h.humidity; vSum += h.visibility;
+                        codes.push(h.code); 
+                        count++;
+                    }
+                });
+                
+                if (count > 0) {
+                    const modeCode = codes.sort((a,b) => codes.filter(v=>v===a).length - codes.filter(v=>v===b).length).pop();
+                    const wInfo = getWeatherDesc(modeCode, false);
+                    const visKm = (vSum / count / 1000).toFixed(1);
+                    let visStatus = "bg-red-500", visColor = "bg-red-500";
+                    if (visKm >= 10) { visStatus = "양호"; visColor = "bg-blue-500"; }
+                    else if (visKm >= 5) { visStatus = "보통"; visColor = "bg-green-500"; }
+                    
+                    const avgCloud = Math.round(cSum/count);
+                    const descText = avgCloud < 30 ? "구름 조금" : (avgCloud < 70 ? "구름 많음" : "흐림/비");
+
+                    dsdWeatherInfo = {
+                        desc: descText, icon: wInfo.icon, color: wInfo.color,
+                        cloud: avgCloud, temp: Math.round(tSum/count), humidity: Math.round(hSum/count),
+                        visibility: visKm, visStatus, visColor
+                    };
+                }
+            }
+
+            state.data = {
+                sunset: sunTimes.sunset, civilDusk: sunTimes.dusk, nautDusk: sunTimes.nauticalDusk, astroDusk: astroDusk,
+                astroDawn: astroDawn, nautDawn: sunTimesNext.nauticalDawn, civilDawn: sunTimesNext.dawn, sunrise: sunTimesNext.sunrise,
+                dsdStart: dsdStart, dsdEnd: dsdEnd, dsdDuration: dsdDurationStr, moonPhaseSvg: phaseInfo.svg,
+                moonrise: moonTimesToday.rise, moonset: moonTimesToday.set, moonAge: moonAge,
+                dsdWeatherInfo
+            };
+            
+            renderApp();
+            if (updatePicker && state.view === 'home') {
+                buildWheelPicker();
+            } else {
+                updateNativePickerValue();
             }
         }
 
@@ -1200,7 +1375,7 @@
 
             if (state.view === 'home') {
                 
-                // 홈 DSD 날씨 위젯 (구름 상세 수치 포함)
+                // 홈 날씨 위젯 (실시간 현재 날씨 적용으로 일관성 유지)
                 let weatherWidget = '';
                 if (state.isLoadingWeather) {
                     weatherWidget = `
@@ -1208,19 +1383,19 @@
                             <span class="text-xs text-gray-400 flex items-center gap-1.5"><i data-lucide="loader" class="w-4 h-4 animate-spin"></i>분석 중...</span>
                         </div>
                     `;
-                } else if (state.data && state.data.dsdWeatherInfo) {
-                    const dw = state.data.dsdWeatherInfo;
+                } else if (state.weather && state.weather.current) {
+                    const cur = state.weather.current;
                     weatherWidget = `
                         <div class="flex items-center gap-3 md:gap-4 bg-gray-900/60 p-2.5 md:p-3 rounded-3xl border border-gray-700 shadow-md w-full sm:w-auto shrink-0">
-                            <i data-lucide="${dw.icon}" class="w-10 h-10 md:w-12 md:h-12 ${dw.color} shrink-0 ml-1"></i>
+                            <i data-lucide="${cur.icon}" class="w-10 h-10 md:w-12 md:h-12 ${cur.color} shrink-0 ml-1"></i>
                             <div class="flex flex-col pr-2">
                                 <div class="text-white font-bold text-[15px] md:text-[16px] leading-tight flex items-center gap-1.5">
-                                    ${dw.desc} <span class="text-gray-300">(${dw.cloud}%)</span>
+                                    현재 날씨 <span class="text-gray-300">(${cur.cloud}%)</span>
                                 </div>
-                                <div class="text-gray-400 text-[12px] md:text-[13px] my-0.5">${dw.temp}°C <span class="text-gray-600 mx-1">|</span> 습도 ${dw.humidity}%</div>
+                                <div class="text-gray-400 text-[12px] md:text-[13px] my-0.5">${cur.temp}°C <span class="text-gray-600 mx-1">|</span> 습도 ${cur.humidity}%</div>
                                 <div class="flex items-center gap-1.5 mt-1">
-                                    <span class="${dw.visColor} text-white px-2 py-0.5 rounded text-[10px] md:text-[11px] font-bold leading-none">${dw.visStatus}</span>
-                                    <span class="text-gray-400 text-[11px] md:text-[12px] leading-none">시정 ${dw.visibility}km</span>
+                                    <span class="${cur.visColor} text-white px-2 py-0.5 rounded text-[10px] md:text-[11px] font-bold leading-none">${cur.visStatus}</span>
+                                    <span class="text-gray-400 text-[11px] md:text-[12px] leading-none">시정 ${cur.visibility}km</span>
                                 </div>
                             </div>
                         </div>
@@ -1357,7 +1532,6 @@
                                 
                             </div>
                         </div>
-                        <!-- 홈 화면 하부 출처는 요청에 따라 깔끔하게 삭제되었습니다. -->
                     </div>
                 `;
             } else if (state.view === 'moon') {
@@ -1379,7 +1553,7 @@
                     const moonPhaseInfo = getMoonPhaseInfo(moon.phase, 32); // 위상 크기를 32px로 상향 (기존 26)
                     const moonAge = (moon.phase * 29.53058867);
                     
-                    // 고정밀 설삭망 테이블 기반 음력 추출
+                    // 기획안 이미지(image_dc59a8.png) 반영 및 고정밀 설삭망 테이블 기반 음력 추출
                     const lunarInfo = getApproximateLunarDate(currentDate);
                     const lunarDateStr = lunarInfo.formatted;
                     
